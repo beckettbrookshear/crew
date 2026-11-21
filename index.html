@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CREW</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --line: #e2e5ea; --text: #1d2330;
+    --muted: #6b7382; --accent: #2f6fde; --accent-text: #ffffff;
+    --ok: #1f9d55; --warn: #c27c0e; --bad: #d04040; --soft: #eef2fb;
+    --mine: #e4edff; --dm: #fff3dc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1b1f27; --line: #2c323d; --text: #e6e9ef;
+      --muted: #8f98a8; --accent: #5b8ff0; --accent-text: #0d1117;
+      --ok: #3fbf74; --warn: #e0a440; --bad: #ec6a6a; --soft: #222a38;
+      --mine: #23314c; --dm: #3a3020;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; border: 1px solid var(--line); background: var(--panel);
+           border-radius: 8px; padding: 7px 14px; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  input, select, textarea { background: var(--panel); border: 1px solid var(--line);
+           border-radius: 8px; padding: 8px 10px; width: 100%; }
+  textarea { resize: vertical; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+  .muted { color: var(--muted); }
+  .hidden { display: none !important; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+
+  /* join */
+  #join { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+          padding: 28px; width: 100%; max-width: 380px; }
+  .card h1 { margin: 0 0 4px; font-size: 24px; }
+  .card button { width: 100%; margin-top: 18px; padding: 10px; }
+  .error { color: var(--bad); min-height: 1.4em; margin-top: 10px; font-size: 14px; }
+
+  /* app */
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+           padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  header .title { font-weight: 700; }
+  header .spacer { flex: 1; }
+  .pill { font-size: 12px; padding: 2px 9px; border-radius: 99px; background: var(--soft); }
+  .status::before { content: "●"; margin-right: 5px; color: var(--ok); }
+  .status.off::before { color: var(--warn); }
+  .layout { display: grid; grid-template-columns: 240px 1fr; gap: 16px; padding: 16px;
+            max-width: 1200px; margin: 0 auto; }
+  aside, main { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+  aside { padding: 14px; align-self: start; }
+  aside h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; }
+  .peer { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); flex: none; }
+  .dot.off { background: var(--warn); }
+  .peer .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { font-size: 11px; padding: 1px 7px; border-radius: 99px; background: var(--soft); color: var(--muted); white-space: nowrap; }
+  .badge.help { color: var(--ok); }
+
+  .tabs { display: flex; border-bottom: 1px solid var(--line); padding: 0 8px; }
+  .tabs button { border: 0; border-radius: 0; background: none; padding: 12px 14px;
+                 border-bottom: 2px solid transparent; color: var(--muted); }
+  .tabs button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+  .tabs .count { background: var(--bad); color: #fff; border-radius: 99px; font-size: 11px; padding: 0 6px; margin-left: 4px; }
+  .pane { padding: 16px; }
+
+  /* chat */
+  #messages { height: 52vh; min-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
+  .msg { max-width: 80%; padding: 7px 11px; border-radius: 10px; background: var(--soft); align-self: flex-start; word-wrap: break-word; white-space: pre-wrap; }
+  .msg.me { background: var(--mine); align-self: flex-end; }
+  .msg.dm { background: var(--dm); }
+  .msg .who { font-size: 12px; color: var(--muted); display: block; margin-bottom: 2px; }
+  .msg.sys { background: none; align-self: center; color: var(--muted); font-size: 13px; padding: 2px; }
+  .composer { display: flex; gap: 8px; margin-top: 8px; }
+  .composer select { width: 150px; flex: none; }
+  .composer input { flex: 1; }
+
+  /* notes */
+  #notes { height: 55vh; min-height: 260px; }
+
+  /* compute */
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .box { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 16px; }
+  .box h3 { margin: 0 0 6px; font-size: 16px; }
+  .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; margin: 0; color: var(--text); font-size: 15px; }
+  .switch input { width: auto; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .job { border-top: 1px solid var(--line); padding: 12px 0; }
+  .job:first-child { border-top: 0; }
+  .bar { height: 8px; background: var(--soft); border-radius: 99px; overflow: hidden; margin: 6px 0; }
+  .bar > div { height: 100%; background: var(--accent); transition: width .2s; }
+  .result { background: var(--soft); border-radius: 8px; padding: 10px; margin-top: 8px; white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow: auto; }
+  .small { font-size: 13px; padding: 4px 10px; }
+
+  @media (max-width: 760px) {
+    .layout { grid-template-columns: 1fr; padding: 12px; }
+    .grid2 { grid-template-columns: 1fr; }
+    .composer { flex-wrap: wrap; }
+    .composer select { width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ JOIN SCREEN ============ -->
+<section id="join">
+  <form class="card" id="joinForm">
+    <h1>CREW</h1>
+    <div class="muted">Collaborative Resource Exchange Web<br>Link up to 12 computers in one group.</div>
+    <label for="jName">Your name</label>
+    <input id="jName" maxlength="24" autocomplete="nickname" required>
+    <label for="jRoom">Group code (everyone uses the same one)</label>
+    <input id="jRoom" maxlength="32" placeholder="e.g. lab-team" required>
+    <button class="primary" type="submit" id="joinBtn">Join group</button>
+    <div class="error" id="joinErr"></div>
+  </form>
+</section>
+
+<!-- ============ MAIN APP ============ -->
+<section id="app" class="hidden">
+  <header>
+    <span class="title">CREW</span>
+    <span class="pill" id="roomPill"></span>
+    <span class="pill" id="countPill"></span>
+    <span class="pill status" id="statusPill">Connected</span>
+    <span class="spacer"></span>
+    <button class="small" id="inviteBtn">Copy invite link</button>
+    <button class="small" id="leaveBtn">Leave</button>
+  </header>
+
+  <div class="layout">
+    <aside>
+      <h2>Computers</h2>
+      <div id="peerList"></div>
+    </aside>
+
+    <main>
+      <nav class="tabs">
+        <button data-tab="chat" class="on">Chat <span class="count hidden" id="unread"></span></button>
+        <button data-tab="notes">Shared notes</button>
+        <button data-tab="compute">Work together</button>
+      </nav>
+
+      <div class="pane" id="tab-chat">
+        <div id="messages"></div>
+        <form class="composer" id="chatForm">
+          <select id="chatTo" title="Send to"></select>
+          <input id="chatText" placeholder="Type a message…" autocomplete="off">
+          <button class="primary" type="submit">Send</button>
+        </form>
+      </div>
+
+      <div class="pane hidden" id="tab-notes">
+        <div class="muted" style="margin-bottom:8px">Everyone sees and edits this notepad live. <span id="notesBy"></span></div>
+        <textarea id="notes" class="mono" placeholder="Shared notes…"></textarea>
+      </div>
+
+      <div class="pane hidden" id="tab-compute">
+        <div class="box">
+          <h3>This computer</h3>
+          <div class="row">
+            <label class="switch"><input type="checkbox" id="helpToggle"> Help with jobs</label>
+            <span class="muted">Run up to</span>
+            <select id="slots" style="width:auto"></select>
+            <span class="muted">pieces at once</span>
+          </div>
+          <div class="muted" style="margin-top:8px">
+            Running now: <b id="runningNow">0</b> · Pieces finished here: <b id="doneHere">0</b><br>
+            Helping runs code that people in your group write, inside a browser sandbox. Only turn it on for groups you trust.
+          </div>
+        </div>
+
+        <div class="box">
+          <h3>Jobs</h3>
+          <div id="jobList" class="muted">No jobs yet.</div>
+        </div>
+
+        <form class="box" id="jobForm">
+          <h3>Start a job</h3>
+          <div class="muted">A job is split into pieces. Each helper computer runs <span class="mono">work(input)</span> on some of the pieces, then your computer runs <span class="mono">combine(results, inputs)</span> on all the answers.</div>
+          <div class="grid2">
+            <div>
+              <label for="example">Start from an example</label>
+              <select id="example"></select>
+            </div>
+            <div>
+              <label for="jobTitle">Job name</label>
+              <input id="jobTitle" maxlength="80">
+            </div>
+          </div>
+          <label for="jobCode">work(input): runs on helper computers, once per piece</label>
+          <textarea id="jobCode" class="mono" rows="10" spellcheck="false"></textarea>
+          <label for="jobInputs">Inputs: a JSON list with one item per piece</label>
+          <textarea id="jobInputs" class="mono" rows="3" spellcheck="false"></textarea>
+          <label for="jobCombine">combine(results, inputs): runs on your computer at the end (optional)</label>
+          <textarea id="jobCombine" class="mono" rows="5" spellcheck="false"></textarea>
+          <div class="row" style="margin-top:12px">
+            <button class="primary" type="submit">Start job</button>
+            <span class="error" id="jobErr" style="margin:0"></span>
+          </div>
+        </form>
+      </div>
+    </main>
+  </div>
+</section>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const el = (tag, props = {}, ...kids) => {
+  const e = Object.assign(document.createElement(tag), props);
+  for (const k of kids) e.append(k);
+  return e;
+};
+const store = {
+  get(k) { try { return JSON.parse(sessionStorage.getItem(k) ?? localStorage.getItem(k)); } catch { return null; } },
+  set(k, v, session) { try { (session ? sessionStorage : localStorage).setItem(k, JSON.stringify(v)); } catch {} },
+  del(k) { try { sessionStorage.removeItem(k); } catch {} },
+};
+
+// ---------------- state ----------------
+let S = null;            // {room, id, token, name}
+let es = null;
+let me = null;
+let peers = [];
+let jobs = [];
+const jobCode = {};      // job id -> work() code, cached on helpers
+const finished = {};     // job id -> {results, combined, ...} (my own jobs)
+let running = 0, doneHere = 0, unread = 0, tab = "chat";
+let rejoining = false;
+
+// ---------------- network ----------------
+async function api(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || r.statusText); e.status = r.status; throw e; }
+  return j;
+}
+async function send(msg) {
+  try { return await api("/api/send", { ...S, msg }); }
+  catch (e) { if (e.status === 401) rejoin(); throw e; }
+}
+
+async function join(name, room) {
+  const r = await api("/api/join", { name, room });
+  S = { room: r.room, id: r.id, token: r.token, name: r.name };
+  store.set("session", S, true);
+  store.set("last", { name, room: r.room });
+  history.replaceState(null, "", "#" + encodeURIComponent(r.room));
+  connect();
+}
+
+function connect() {
+  if (es) es.close();
+  const q = new URLSearchParams({ room: S.room, id: S.id, token: S.token });
+  es = new EventSource("/api/events?" + q);
+  es.onopen = () => setStatus(true);
+  es.onmessage = e => handle(JSON.parse(e.data));
+  es.onerror = () => {
+    setStatus(false);
+    if (es.readyState === EventSource.CLOSED) rejoin();   // seat expired
+  };
+}
+
+async function rejoin() {
+  if (rejoining || !S) return;
+  rejoining = true;
+  es && es.close();
+  const { name, room } = store.get("last") || {};
+  store.del("session");
+  try { await join(name, room); }
+  catch (e) { showJoin(e.message); }
+  finally { rejoining = false; }
+}
+
+function setStatus(ok) {
+  const p = $("#statusPill");
+  p.textContent = ok ? "Connected" : "Reconnecting…";
+  p.classList.toggle("off", !ok);
+}
+
+// ---------------- incoming messages ----------------
+function handle(m) {
+  switch (m.type) {
+    case "welcome":
+      me = m.you;
+      $("#join").classList.add("hidden");
+      $("#app").classList.remove("hidden");
+      $("#roomPill").textContent = "Group: " + m.room;
+      setPeers(m.peers, m.max);
+      setNotes(m.notes, m.notesBy);
+      setJobs(m.jobs);
+      sendHelperState();
+      break;
+    case "peers": setPeers(m.peers); break;
+    case "chat": addChat(m); break;
+    case "notes": setNotes(m.text, m.byName); break;
+    case "jobs": setJobs(m.jobs); break;
+    case "task": runTask(m); break;
+    case "job_done": jobDone(m); break;
+  }
+}
+
+// ---------------- computers list ----------------
+let maxPeers = 12;
+function setPeers(list, max) {
+  if (max) maxPeers = max;
+  peers = list;
+  $("#countPill").textContent = `${list.length} / ${maxPeers} computers`;
+  const box = $("#peerList");
+  box.replaceChildren(...list.map(p => {
+    const row = el("div", { className: "peer" },
+      el("span", { className: "dot" + (p.online ? "" : " off"), title: p.online ? "Online" : "Reconnecting" }),
+      el("span", { className: "name", textContent: p.name + (p.id === S.id ? " (you)" : "") }));
+    if (p.worker) row.append(el("span", { className: "badge help", textContent: `helping · ${p.completed}`, title: `${p.completed} pieces finished` }));
+    return row;
+  }));
+  // recipient picker
+  const sel = $("#chatTo"), prev = sel.value;
+  sel.replaceChildren(el("option", { value: "", textContent: "Everyone" }),
+    ...list.filter(p => p.id !== S.id).map(p => el("option", { value: p.id, textContent: "Only " + p.name })));
+  sel.value = list.some(p => p.id === prev) ? prev : "";
+}
+
+// ---------------- chat ----------------
+function addChat(m) {
+  const box = $("#messages");
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  let node;
+  if (m.system) {
+    node = el("div", { className: "msg sys", textContent: m.text });
+  } else {
+    const mine = m.from === S.id;
+    let who = mine ? "You" : m.fromName;
+    if (m.to) who += mine ? ` → ${m.toName} (private)` : " (private, to you)";
+    const time = new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    node = el("div", { className: "msg" + (mine ? " me" : "") + (m.to ? " dm" : "") },
+      el("span", { className: "who", textContent: `${who} · ${time}` }), m.text);
+  }
+  box.append(node);
+  if (atBottom || m.from === S.id) box.scrollTop = box.scrollHeight;
+  if (tab !== "chat" && !m.system) { unread++; showUnread(); }
+}
+function showUnread() {
+  const u = $("#unread");
+  u.textContent = unread; u.classList.toggle("hidden", !unread);
+}
+$("#chatForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const input = $("#chatText"), text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  try { await send({ type: "chat", text, to: $("#chatTo").value || undefined }); }
+  catch (err) { addChat({ system: true, text: "Not sent: " + err.message }); input.value = text; }
+});
+
+// ---------------- shared notes ----------------
+let notesTimer = null;
+function setNotes(text, by) {
+  const ta = $("#notes");
+  if (ta.value !== text) {
+    const [a, b] = [ta.selectionStart, ta.selectionEnd];
+    ta.value = text;
+    if (document.activeElement === ta) ta.setSelectionRange(a, b);
+  }
+  $("#notesBy").textContent = by ? `Last edit by ${by}.` : "";
+}
+$("#notes").addEventListener("input", () => {
+  clearTimeout(notesTimer);
+  notesTimer = setTimeout(() => {
+    send({ type: "notes", text: $("#notes").value }).catch(() => {});
+    $("#notesBy").textContent = "Last edit by you.";
+  }, 300);
+});
+
+// ---------------- helper (worker) side ----------------
+const cores = navigator.hardwareConcurrency || 2;
+for (let i = 1; i <= Math.min(cores, 16); i++) $("#slots").append(el("option", { value: i, textContent: i }));
+$("#slots").value = Math.max(1, Math.min(cores - 1, 4));
+$("#helpToggle").checked = !!store.get("helping");
+$("#helpToggle").addEventListener("change", () => { store.set("helping", $("#helpToggle").checked); sendHelperState(); });
+$("#slots").addEventListener("change", sendHelperState);
+function sendHelperState() {
+  if (!S) return;
+  send({ type: "worker", on: $("#helpToggle").checked, slots: +$("#slots").value }).catch(() => {});
+}
+
+// Runs `fnName(...args)` from `code` in a sandboxed Web Worker.
+function runSandboxed(code, fnName, args, ms = 60000) {
+  return new Promise(resolve => {
+    const src = code + `
+;self.onmessage = async e => {
+  try {
+    if (typeof ${fnName} !== "function") throw new Error("Your code must define function ${fnName}(...)");
+    const value = await ${fnName}(...e.data);
+    self.postMessage({ ok: true, value: value === undefined ? null : value });
+  } catch (err) { self.postMessage({ ok: false, error: String(err && err.message || err) }); }
+};`;
+    const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+    let w;
+    const done = r => { clearTimeout(timer); w && w.terminate(); URL.revokeObjectURL(url); resolve(r); };
+    const timer = setTimeout(() => done({ ok: false, error: `Timed out after ${ms / 1000}s` }), ms);
+    try { w = new Worker(url); } catch (e) { return done({ ok: false, error: String(e) }); }
+    w.onmessage = e => done(e.data);
+    w.onerror = e => { e.preventDefault(); done({ ok: false, error: e.message || "Script error" }); };
+    w.postMessage(args);
+  });
+}
+
+async function runTask(m) {
+  if (m.code) jobCode[m.job] = m.code;
+  const code = jobCode[m.job];
+  if (!code) return send({ type: "result", job: m.job, task: m.task, needCode: true }).catch(() => {});
+  running++; updateHere();
+  const r = await runSandboxed(code, "work", [m.input]);
+  running--; doneHere++; updateHere();
+  send({ type: "result", job: m.job, task: m.task, ok: r.ok, value: r.value, error: r.error }).catch(() => {});
+}
+function updateHere() {
+  $("#runningNow").textContent = running;
+  $("#doneHere").textContent = doneHere;
+}
+
+// ---------------- jobs (owner side) ----------------
+function setJobs(list) {
+  jobs = list;
+  const box = $("#jobList");
+  if (!list.length) { box.className = "muted"; box.textContent = "No jobs yet."; return; }
+  box.className = "";
+  box.replaceChildren(...list.slice().reverse().map(j => {
+    const mine = j.owner === S.id;
+    const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
+    const stateText = { running: j.running ? "running" : "waiting for helpers", done: "finished", cancelled: "cancelled" }[j.state];
+    const node = el("div", { className: "job" },
+      el("div", { className: "row" },
+        el("b", { textContent: j.title }),
+        el("span", { className: "muted", textContent: `by ${mine ? "you" : j.ownerName} · ${stateText}` })),
+      el("div", { className: "bar" }, el("div", { style: `width:${pct}%` })),
+      el("div", { className: "muted", textContent:
+        `${j.done} of ${j.total} pieces done (${pct}%)` + (j.running ? ` · ${j.running} running` : "") + (j.errors ? ` · ${j.errors} errors` : "") }));
+    if (mine) {
+      const actions = el("div", { className: "row", style: "margin-top:6px" });
+      if (j.state === "running") actions.append(el("button", { className: "small", textContent: "Cancel", onclick: () => send({ type: "cancel", job: j.id }) }));
+      else actions.append(el("button", { className: "small", textContent: "Remove", onclick: () => { delete finished[j.id]; send({ type: "dismiss", job: j.id }); } }));
+      const f = finished[j.id];
+      if (f) {
+        actions.append(el("button", { className: "small", textContent: "Download results", onclick: () => download(f) }));
+        node.append(actions, el("div", { className: "result mono", textContent: f.summary }));
+      } else node.append(actions);
+    }
+    return node;
+  }));
+}
+
+async function jobDone(m) {
+  const f = finished[m.job] = { title: m.title, results: m.results, inputs: m.inputs, summary: "Combining results…" };
+  setJobs(jobs);
+  if (m.combine && m.combine.trim()) {
+    const r = await runSandboxed(m.combine, "combine", [m.results, m.inputs], 120000);
+    f.combined = r.ok ? r.value : { error: r.error };
+    f.summary = r.ok ? "Result: " + pretty(r.value) : "combine() failed: " + r.error;
+  } else {
+    f.summary = "Results: " + pretty(m.results);
+  }
+  setJobs(jobs);
+}
+function pretty(v) {
+  const s = typeof v === "string" ? v : JSON.stringify(v, null, 1);
+  return s.length > 4000 ? s.slice(0, 4000) + "\n… (download for the full results)" : s;
+}
+function download(f) {
+  const blob = new Blob([JSON.stringify({ title: f.title, combined: f.combined, results: f.results, inputs: f.inputs }, null, 2)], { type: "application/json" });
+  const a = el("a", { href: URL.createObjectURL(blob), download: f.title.replace(/[^\w-]+/g, "_") + ".json" });
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------------- job examples ----------------
+const EXAMPLES = {
+  primes: {
+    label: "Count prime numbers (0 to 2,000,000)",
+    title: "Count primes",
+    code:
+`// Gets one piece: [start, end]. Returns how many primes are in it.
+function work([start, end]) {
+  let count = 0;
+  for (let n = Math.max(2, start); n < end; n++) {
+    let prime = true;
+    for (let d = 2; d * d <= n; d++) if (n % d === 0) { prime = false; break; }
+    if (prime) count++;
+  }
+  return count;
+}`,
+    inputs: JSON.stringify(Array.from({ length: 20 }, (_, i) => [i * 100000, (i + 1) * 100000])),
+    combine:
+`function combine(results, inputs) {
+  const total = results.reduce((a, b) => a + b, 0);
+  return "Primes below 2,000,000: " + total;
+}`,
+  },
+  pi: {
+    label: "Estimate π by random sampling",
+    title: "Estimate pi",
+    code:
+`// Gets one piece: how many random points to throw. Returns how many hit the circle.
+function work(samples) {
+  let hits = 0;
+  for (let i = 0; i < samples; i++) {
+    const x = Math.random(), y = Math.random();
+    if (x * x + y * y <= 1) hits++;
+  }
+  return hits;
+}`,
+    inputs: JSON.stringify(Array(24).fill(5000000)),
+    combine:
+`function combine(results, inputs) {
+  const hits = results.reduce((a, b) => a + b, 0);
+  const total = inputs.reduce((a, b) => a + b, 0);
+  return "π ≈ " + (4 * hits / total) + " (from " + total.toLocaleString() + " points)";
+}`,
+  },
+  custom: {
+    label: "Blank job",
+    title: "My job",
+    code: "function work(input) {\n  // do something with input and return the answer\n  return input;\n}",
+    inputs: "[1, 2, 3]",
+    combine: "function combine(results, inputs) {\n  return results;\n}",
+  },
+};
+for (const [k, v] of Object.entries(EXAMPLES)) $("#example").append(el("option", { value: k, textContent: v.label }));
+function loadExample() {
+  const ex = EXAMPLES[$("#example").value];
+  $("#jobTitle").value = ex.title; $("#jobCode").value = ex.code;
+  $("#jobInputs").value = ex.inputs; $("#jobCombine").value = ex.combine;
+}
+$("#example").addEventListener("change", loadExample);
+loadExample();
+
+$("#jobForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const err = $("#jobErr"); err.textContent = "";
+  let inputs;
+  try { inputs = JSON.parse($("#jobInputs").value); } catch { err.textContent = "Inputs are not valid JSON."; return; }
+  if (!Array.isArray(inputs) || !inputs.length) { err.textContent = "Inputs must be a non-empty JSON list, like [1, 2, 3]."; return; }
+  try {
+    await send({ type: "job", title: $("#jobTitle").value, code: $("#jobCode").value, inputs, combine: $("#jobCombine").value });
+    err.textContent = "";
+  } catch (x) { err.textContent = x.message; }
+});
+
+// ---------------- tabs, header, join ----------------
+document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
+  tab = b.dataset.tab;
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".pane").forEach(p => p.classList.toggle("hidden", p.id !== "tab-" + tab));
+  if (tab === "chat") { unread = 0; showUnread(); }
+}));
+
+$("#inviteBtn").addEventListener("click", async () => {
+  const link = location.origin + "/#" + encodeURIComponent(S.room);
+  try { await navigator.clipboard.writeText(link); $("#inviteBtn").textContent = "Copied!"; }
+  catch { prompt("Share this link:", link); }
+  setTimeout(() => $("#inviteBtn").textContent = "Copy invite link", 1500);
+});
+
+$("#leaveBtn").addEventListener("click", async () => {
+  try { await api("/api/leave", S); } catch {}
+  es && es.close(); S = null; store.del("session");
+  showJoin("");
+});
+
+function showJoin(msg) {
+  $("#app").classList.add("hidden");
+  $("#join").classList.remove("hidden");
+  $("#messages").replaceChildren();
+  $("#joinErr").textContent = msg || "";
+}
+
+$("#joinForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const btn = $("#joinBtn"); btn.disabled = true; $("#joinErr").textContent = "";
+  try { await join($("#jName").value, $("#jRoom").value); }
+  catch (x) { $("#joinErr").textContent = x.message; }
+  finally { btn.disabled = false; }
+});
+
+// Prefill from last visit / invite link, and resume a session after a page reload.
+(() => {
+  const last = store.get("last") || {};
+  $("#jName").value = last.name || "";
+  $("#jRoom").value = decodeURIComponent(location.hash.slice(1)) || last.room || "";
+  const saved = store.get("session");
+  if (saved && saved.room === ($("#jRoom").value || saved.room)) { S = saved; connect(); }
+})();
+</script>
+</body>
+</html>
