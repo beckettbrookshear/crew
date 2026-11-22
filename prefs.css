@@ -1,0 +1,228 @@
+/* CREW personal preferences: themes, Linux desktop styling, layout options.
+   Loaded after the page's own styles; every rule is driven by classes and
+   data attributes that prefs.js sets on <html>. */
+
+/* ---------------- themes ---------------- */
+:root {
+  --font: Cantarell, Ubuntu, "Noto Sans", "DejaVu Sans", "Liberation Sans", system-ui, sans-serif;
+  --mono: "DejaVu Sans Mono", "Ubuntu Mono", "Noto Sans Mono", "Liberation Mono", ui-monospace, monospace;
+  --fs: 15px;
+  --r: 10px;
+}
+:root[data-theme="linux-light"] {
+  color-scheme: light;
+  --bg: #fafafa; --panel: #ffffff; --hb: #ebebeb; --line: #d8d8d8;
+  --text: #2e3436; --muted: #77767b; --accent: #3584e4; --accent-text: #ffffff;
+  --ok: #26a269; --warn: #c88800; --bad: #e01b24; --soft: #f0f0f0;
+  --mine: #dbe8fb; --dm: #fdf0d5; --field: #ffffff;
+  --btn: rgba(0,0,0,.07); --btn-hover: rgba(0,0,0,.11); --btn-active: rgba(0,0,0,.17);
+}
+:root[data-theme="linux-dark"] {
+  color-scheme: dark;
+  --bg: #242424; --panel: #2e2e2e; --hb: #303030; --line: #1c1c1c;
+  --text: #ffffff; --muted: #9a9996; --accent: #78aeed; --accent-text: #1e1e1e;
+  --ok: #57e389; --warn: #f6d32d; --bad: #ff7b63; --soft: #383838;
+  --mine: #1f3a5f; --dm: #4a3f1d; --field: #383838;
+  --btn: rgba(255,255,255,.10); --btn-hover: rgba(255,255,255,.15); --btn-active: rgba(255,255,255,.22);
+}
+:root[data-theme="terminal-green"], :root[data-theme="terminal-amber"] {
+  color-scheme: dark;
+  --font: var(--mono);
+  --bg: #0b0b0b; --panel: #101010; --hb: #151515; --field: #060606;
+  --accent-text: #000000; --bad: #ff5555;
+}
+:root[data-theme="terminal-green"] {
+  --line: #1d3a24; --text: #3df07a; --muted: #279a4e; --accent: #3df07a;
+  --ok: #3df07a; --warn: #e6c229; --soft: #0f2015; --mine: #10301a; --dm: #2a2a0f;
+  --btn: rgba(61,240,122,.08); --btn-hover: rgba(61,240,122,.14); --btn-active: rgba(61,240,122,.22);
+}
+:root[data-theme="terminal-amber"] {
+  --line: #3a2c10; --text: #ffb627; --muted: #a87510; --accent: #ffb627;
+  --ok: #ffb627; --warn: #ffd866; --soft: #201708; --mine: #33240a; --dm: #2b1f0c;
+  --btn: rgba(255,182,39,.08); --btn-hover: rgba(255,182,39,.14); --btn-active: rgba(255,182,39,.22);
+}
+:root[data-theme="solarized-light"] {
+  color-scheme: light;
+  --bg: #fdf6e3; --panel: #fffcf2; --hb: #eee8d5; --line: #ddd6c1; --field: #fffcf2;
+  --text: #586e75; --muted: #93a1a1; --accent: #268bd2; --accent-text: #ffffff;
+  --ok: #859900; --warn: #b58900; --bad: #dc322f; --soft: #eee8d5;
+  --mine: #dcebf5; --dm: #f5e9c8;
+  --btn: rgba(88,110,117,.10); --btn-hover: rgba(88,110,117,.16); --btn-active: rgba(88,110,117,.24);
+}
+:root[data-theme="solarized-dark"] {
+  color-scheme: dark;
+  --bg: #002b36; --panel: #073642; --hb: #073642; --line: #0d4b5a; --field: #002b36;
+  --text: #93a1a1; --muted: #657b83; --accent: #268bd2; --accent-text: #ffffff;
+  --ok: #859900; --warn: #b58900; --bad: #dc322f; --soft: #0a3f4c;
+  --mine: #0d4a63; --dm: #3d3a17;
+  --btn: rgba(147,161,161,.10); --btn-hover: rgba(147,161,161,.16); --btn-active: rgba(147,161,161,.24);
+}
+:root[data-theme="contrast"] {
+  color-scheme: light;
+  --bg: #ffffff; --panel: #ffffff; --hb: #ffffff; --line: #000000; --field: #ffffff;
+  --text: #000000; --muted: #2b2b2b; --accent: #0033cc; --accent-text: #ffffff;
+  --ok: #006b2e; --warn: #8a5a00; --bad: #b00000; --soft: #ececec;
+  --mine: #dde6ff; --dm: #fff0c2;
+  --btn: #ffffff; --btn-hover: #e6e6e6; --btn-active: #cccccc;
+}
+:root[data-theme="contrast"] button { border: 2px solid #000 !important; }
+
+body { font-family: var(--font); font-size: var(--fs); background: var(--bg); color: var(--text); }
+.mono, .mono * { font-family: var(--mono) !important; }
+
+/* ---------------- Linux desktop look ---------------- */
+:root.style-linux header {
+  background: var(--hb); border-bottom: 1px solid var(--line);
+  padding: 6px 10px; min-height: 46px; gap: 8px;
+}
+:root.style-linux header .title { font-weight: 800; letter-spacing: .02em; }
+:root.style-linux .pill { background: var(--btn); }
+:root.style-linux button {
+  background: var(--btn); border: 1px solid transparent; border-radius: 6px;
+  padding: 5px 12px; font-weight: 600;
+}
+:root.style-linux button:hover:not(:disabled) { background: var(--btn-hover); }
+:root.style-linux button:active:not(:disabled) { background: var(--btn-active); }
+:root.style-linux button.primary { background: var(--accent); color: var(--accent-text); }
+:root.style-linux button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+:root.style-linux input, :root.style-linux select, :root.style-linux textarea {
+  background: var(--field); border: 1px solid var(--line); border-radius: 6px;
+}
+:root.style-linux :focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 1px;
+}
+:root.style-linux aside, :root.style-linux main, :root.style-linux .card { border-radius: var(--r); }
+
+/* GTK-style "linked" view switcher for the tabs */
+:root.style-linux .tabs { justify-content: center; padding: 8px; gap: 0; flex-wrap: wrap; }
+:root.style-linux .tabs button {
+  border-radius: 0; border: 0; border-bottom: 0; margin: 0;
+  padding: 5px 14px; background: var(--btn); color: var(--text); font-weight: 600;
+}
+:root.style-linux .tabs button + button { border-left: 1px solid var(--line); }
+:root.style-linux .tabs button:first-child { border-radius: 6px 0 0 6px; }
+:root.style-linux .tabs button:last-child { border-radius: 0 6px 6px 0; }
+:root.style-linux .tabs button.on { background: var(--btn-active); }
+
+/* thin desktop-style scrollbars */
+:root.style-linux * { scrollbar-width: thin; scrollbar-color: var(--muted) transparent; }
+
+/* ---------------- status bar ---------------- */
+#crewStatusbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+  display: none; gap: 14px; align-items: center;
+  height: 26px; padding: 0 12px; font: 12px/26px var(--mono);
+  background: var(--hb, var(--panel)); color: var(--muted); border-top: 1px solid var(--line);
+  white-space: nowrap; overflow: hidden;
+}
+#crewStatusbar .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+#crewStatusbar b { color: var(--text); font-weight: 600; }
+:root.statusbar.in-app #crewStatusbar { display: flex; }
+:root.statusbar.in-app body { padding-bottom: 26px; }
+
+/* ---------------- density & corners ---------------- */
+:root.density-compact .layout { gap: 8px; padding: 8px; }
+:root.density-compact .pane { padding: 10px; }
+:root.density-compact .peer { padding: 2px 0; }
+:root.density-compact .msg { padding: 3px 8px; }
+:root.density-compact #messages { gap: 4px; }
+:root.density-compact .box { padding: 10px; margin-bottom: 10px; }
+:root.density-roomy .layout { gap: 24px; padding: 24px; }
+:root.density-roomy .pane { padding: 24px; }
+:root.density-roomy .peer { padding: 10px 0; }
+:root.density-roomy .msg { padding: 10px 14px; }
+:root.density-roomy #messages { gap: 12px; }
+:root.square { --r: 0px; }
+:root.square *:not(.dot):not(.crew-swatch) { border-radius: 0 !important; }
+
+/* ---------------- layout ---------------- */
+@media (min-width: 761px) {
+  :root.sidebar-right .layout { grid-template-columns: 1fr 240px; }
+  :root.sidebar-right aside { order: 2; }
+}
+:root.sidebar-hidden .layout { grid-template-columns: 1fr; }
+:root.sidebar-hidden aside { display: none; }
+:root.wide .layout { max-width: none; }
+:root.no-anim *, :root.no-anim *::before, :root.no-anim *::after { transition: none !important; animation: none !important; }
+
+/* ---------------- chat formatting ---------------- */
+.msg .who time::before { content: " · "; }
+.msg.sys time { display: none; }
+:root.no-ts .msg time { display: none !important; }
+:root.no-joinleave .msg.sys.crew-jl { display: none; }
+
+/* IRC-style lines:  [12:01] <Ann> hello */
+:root.chat-lines #messages { gap: 1px; }
+:root.chat-lines .msg, :root.chat-lines .msg.me, :root.chat-lines .msg.dm {
+  max-width: none; align-self: stretch; background: none; border-radius: 0;
+  padding: 1px 4px; font-family: var(--mono); font-size: .92em;
+}
+:root.chat-lines .msg.dm { color: var(--warn); }
+:root.chat-lines .msg .who {
+  display: inline-flex; gap: 8px; margin: 0 8px 0 0; font-size: inherit;
+}
+:root.chat-lines .msg .who time { order: -1; color: var(--muted); }
+:root.chat-lines .msg .who time::before { content: "["; }
+:root.chat-lines .msg .who time::after { content: "]"; }
+:root.chat-lines .msg .who .nm { color: var(--accent); font-weight: 700; }
+:root.chat-lines .msg.me .who .nm { color: var(--ok); }
+:root.chat-lines .msg .who .nm::before { content: "<"; }
+:root.chat-lines .msg .who .nm::after { content: ">"; }
+:root.chat-lines .msg.sys { align-self: stretch; text-align: left; font-style: normal; }
+:root.chat-lines .msg.sys::before { content: "-!- "; color: var(--muted); }
+:root.chat-lines .msg.sys time { display: inline; margin-right: 8px; }
+:root.chat-lines .msg.sys time::before { content: "["; }
+:root.chat-lines .msg.sys time::after { content: "]"; }
+
+/* ---------------- preferences window ---------------- */
+#crewPrefs {
+  width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 48px);
+  padding: 0; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--bg); color: var(--text); overflow: hidden;
+  box-shadow: 0 12px 40px rgba(0,0,0,.35);
+}
+#crewPrefs::backdrop { background: rgba(0,0,0,.35); }
+#crewPrefs .ph {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  background: var(--hb, var(--panel)); border-bottom: 1px solid var(--line);
+}
+#crewPrefs .ph h2 { flex: 1; margin: 0; font-size: 15px; text-align: center; }
+#crewPrefs .pnav { display: flex; justify-content: center; padding: 10px; gap: 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+#crewPrefs .pnav button { border-radius: 0; border: 0; background: var(--btn, var(--soft)); padding: 5px 14px; font-weight: 600; }
+#crewPrefs .pnav button + button { border-left: 1px solid var(--line); }
+#crewPrefs .pnav button:first-child { border-radius: 6px 0 0 6px; }
+#crewPrefs .pnav button:last-child { border-radius: 0 6px 6px 0; }
+#crewPrefs .pnav button.on { background: var(--btn-active, var(--line)); }
+#crewPrefs .pbody { overflow-y: auto; max-height: calc(100vh - 170px); padding: 14px 18px 20px; }
+#crewPrefs h3 { font-size: 14px; margin: 16px 0 6px; }
+#crewPrefs h3:first-child { margin-top: 0; }
+#crewPrefs .list { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); }
+#crewPrefs .prow { display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 52px; }
+#crewPrefs .prow + .prow { border-top: 1px solid var(--line); }
+#crewPrefs .prow .lab { flex: 1; min-width: 0; }
+#crewPrefs .prow .lab small { display: block; color: var(--muted); font-size: 12px; }
+#crewPrefs .prow select { width: auto; max-width: 220px; }
+#crewPrefs .prow input[type=range] { width: 160px; }
+#crewPrefs .pfoot { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+#crewPrefs kbd {
+  font-family: var(--mono); font-size: 12px; padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--line); background: var(--panel);
+}
+
+/* on/off switch, GTK style */
+.crew-switch { position: relative; width: 44px; height: 24px; flex: none; }
+.crew-switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.crew-switch span { position: absolute; inset: 0; border-radius: 99px; background: var(--btn-active, var(--line)); transition: background .15s; pointer-events: none; }
+.crew-switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: left .15s; }
+.crew-switch input:checked + span { background: var(--accent); }
+.crew-switch input:checked + span::after { left: 23px; }
+.crew-switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.crew-swatches { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.crew-swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; padding: 0; cursor: pointer; }
+.crew-swatch.on { border-color: var(--text); box-shadow: inset 0 0 0 2px var(--panel); }
+#crewPrefs .crew-swatch.auto { background: conic-gradient(#3584e4, #2190a4, #3a944a, #c88800, #ed5b00, #e62d42, #d56199, #9141ac, #3584e4); }
+.crew-swatches input[type=color] { width: 30px; height: 26px; padding: 0; border: 0; background: none; cursor: pointer; }
+
+#crewPrefsBtn { font-size: 16px; line-height: 1; padding: 5px 9px; }

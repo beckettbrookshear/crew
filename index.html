@@ -59,7 +59,9 @@
   .peer { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); flex: none; }
   .dot.off { background: var(--warn); }
-  .peer .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .peer .who { flex: 1; min-width: 0; }
+  .peer .name, .peer .spec { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .peer .spec { font-size: 12px; color: var(--muted); }
   .badge { font-size: 11px; padding: 1px 7px; border-radius: 99px; background: var(--soft); color: var(--muted); white-space: nowrap; }
   .badge.help { color: var(--ok); }
 
@@ -98,13 +100,46 @@
   .result { background: var(--soft); border-radius: 8px; padding: 10px; margin-top: 8px; white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow: auto; }
   .small { font-size: 13px; padding: 4px 10px; }
 
+  /* processors */
+  .tablewrap { overflow-x: auto; }
+  table.procs { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.procs th, table.procs td { text-align: left; padding: 6px 8px; border-top: 1px solid var(--line); white-space: nowrap; }
+  table.procs th { color: var(--muted); font-weight: 500; font-size: 12px; border-top: 0; }
+  table.procs td.gpu { white-space: normal; min-width: 160px; color: var(--muted); font-size: 13px; }
+  .speed { display: inline-block; height: 6px; border-radius: 99px; background: var(--accent); vertical-align: middle; margin-left: 6px; }
+
+  /* files */
+  #tab-files.dragging .drop { border-color: var(--accent); background: var(--soft); }
+  .drop { border-style: dashed; }
+  .file { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); padding: 10px 0; flex-wrap: wrap; }
+  .file:first-child { border-top: 0; }
+  .file .info { flex: 1; min-width: 180px; }
+  .file .info b { word-break: break-all; }
+  .upload { margin-top: 10px; font-size: 14px; }
+  .upload .bar { margin: 4px 0 0; }
+
   @media (max-width: 760px) {
     .layout { grid-template-columns: 1fr; padding: 12px; }
     .grid2 { grid-template-columns: 1fr; }
     .composer { flex-wrap: wrap; }
     .composer select { width: 100%; }
   }
+
+  /* owner alerts */
+  .alert { border-top: 1px solid var(--line); padding: 12px 0; }
+  .alert:first-child { border-top: 0; }
+  .alert .lvl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+                padding: 1px 8px; border-radius: 99px; color: #fff; background: var(--muted); }
+  .lvl-high .lvl { background: var(--bad); }
+  .lvl-medium .lvl { background: var(--warn); }
+  .peer .crown { flex: none; cursor: default; }
+  #toasts { position: fixed; right: 16px; bottom: 40px; z-index: 60; display: flex; flex-direction: column; gap: 8px; width: min(360px, calc(100vw - 32px)); }
+  .toast { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--warn);
+           border-radius: 10px; padding: 12px 14px; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+  .toast.lvl-high { border-left-color: var(--bad); }
 </style>
+<link rel="stylesheet" href="prefs.css">
+<script src="prefs.js"></script>
 </head>
 <body>
 
@@ -117,6 +152,9 @@
     <input id="jName" maxlength="24" autocomplete="nickname" required>
     <label for="jRoom">Group code (everyone uses the same one)</label>
     <input id="jRoom" maxlength="32" placeholder="e.g. lab-team" required>
+    <label for="jPass">Group password</label>
+    <input id="jPass" type="password" maxlength="128" autocomplete="off" placeholder="Leave blank for an open group">
+    <div class="muted" style="font-size:13px;margin-top:4px">If you're starting a new group, the password you type here becomes its password.</div>
     <button class="primary" type="submit" id="joinBtn">Join group</button>
     <div class="error" id="joinErr"></div>
   </form>
@@ -127,6 +165,7 @@
   <header>
     <span class="title">CREW</span>
     <span class="pill" id="roomPill"></span>
+    <span class="pill" id="lockPill"></span>
     <span class="pill" id="countPill"></span>
     <span class="pill status" id="statusPill">Connected</span>
     <span class="spacer"></span>
@@ -143,9 +182,31 @@
     <main>
       <nav class="tabs">
         <button data-tab="chat" class="on">Chat <span class="count hidden" id="unread"></span></button>
+        <button data-tab="files">Files <span class="count hidden" id="newFiles"></span></button>
         <button data-tab="notes">Shared notes</button>
         <button data-tab="compute">Work together</button>
+        <button data-tab="alerts" id="alertsTab" class="hidden" title="Only you see this, because you own the group">Alerts <span class="count hidden" id="alertCount"></span></button>
       </nav>
+
+      <div class="pane hidden" id="tab-alerts">
+        <div class="box">
+          <div class="row">
+            <h3 style="flex:1;margin:0">Suspicious activity</h3>
+            <button type="button" class="small" id="clearAlerts">Clear all</button>
+          </div>
+          <div class="muted" style="font-size:13px;margin:4px 0 8px">Only you see this, because you own the group. CREW checks chat, shared notes, job code and joining for common warning signs, such as links to program files, requests for passwords, spam, wiped notes, job code that contacts the internet or mines cryptocurrency, faked job answers and password guessing. These are pattern checks, so some alerts will be false alarms.</div>
+          <div id="alertList" class="muted">Nothing suspicious so far.</div>
+        </div>
+        <div class="box">
+          <h3>Group password</h3>
+          <div class="muted" style="font-size:13px">After removing someone who knows the password, change it so they can't come back from another browser. Leave it blank to make the group open.</div>
+          <form class="row" id="pwForm" style="margin-top:8px">
+            <input type="password" id="newPw" maxlength="128" autocomplete="new-password" placeholder="New group password" style="flex:1;width:auto;min-width:160px">
+            <button class="primary" type="submit">Change password</button>
+          </form>
+          <div class="muted" id="pwMsg" style="font-size:13px;margin-top:6px"></div>
+        </div>
+      </div>
 
       <div class="pane" id="tab-chat">
         <div id="messages"></div>
@@ -154,6 +215,24 @@
           <input id="chatText" placeholder="Type a message…" autocomplete="off">
           <button class="primary" type="submit">Send</button>
         </form>
+      </div>
+
+      <div class="pane hidden" id="tab-files">
+        <div class="box drop">
+          <h3>Share a file</h3>
+          <div class="muted">Drop files anywhere on this tab, or choose them below. Up to <span id="fileMax">25 MB</span> each.
+            Files are kept on the host computer until they're deleted or everyone leaves the group.</div>
+          <div class="row" style="margin-top:10px">
+            <input type="file" id="fileInput" multiple style="flex:1;width:auto;min-width:0">
+            <select id="fileTo" style="width:auto" title="Share with"></select>
+          </div>
+          <div id="uploads"></div>
+        </div>
+        <div class="box">
+          <h3>Shared files</h3>
+          <div class="muted" id="fileUsage" style="font-size:13px;margin-bottom:6px"></div>
+          <div id="fileList" class="muted">No files yet.</div>
+        </div>
       </div>
 
       <div class="pane hidden" id="tab-notes">
@@ -174,6 +253,21 @@
             Running now: <b id="runningNow">0</b> · Pieces finished here: <b id="doneHere">0</b><br>
             Helping runs code that people in your group write, inside a browser sandbox. Only turn it on for groups you trust.
           </div>
+          <div class="row" style="margin-top:12px">
+            <label class="switch"><input type="checkbox" id="shareSpecs"> Share this computer's processor details</label>
+            <span class="muted" id="myScore"></span>
+            <button type="button" class="small" id="benchBtn">Test speed again</button>
+          </div>
+        </div>
+
+        <div class="box">
+          <h3>Processors in this group</h3>
+          <div class="muted" id="procTotals" style="margin-bottom:8px"></div>
+          <div class="tablewrap"><table class="procs">
+            <thead><tr><th>Computer</th><th>Cores</th><th>Memory</th><th>Speed</th><th>System</th><th>Helping</th><th>Graphics</th></tr></thead>
+            <tbody id="procRows"></tbody>
+          </table></div>
+          <div class="muted" style="font-size:13px;margin-top:8px">Speed is a 1-second single-core test run in the browser; higher is faster. Memory is rounded by the browser, and some browsers (Firefox, Safari) don't report it.</div>
         </div>
 
         <div class="box">
@@ -247,10 +341,24 @@ async function send(msg) {
   catch (e) { if (e.status === 401) rejoin(); throw e; }
 }
 
-async function join(name, room) {
-  const r = await api("/api/join", { name, room });
+// A random id this browser keeps, so a group owner can keep a removed computer out.
+const deviceId = (() => {
+  let d = store.get("device");
+  if (!d) {
+    d = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("");
+    store.set("device", d);
+  }
+  return d;
+})();
+
+async function join(name, room, password) {
+  const r = await api("/api/join", { name, room, password, device: deviceId });
+  // Job ids restart in each group, so drop code and sandboxes from before.
+  for (const k in jobCode) delete jobCode[k];
+  closePools();
   S = { room: r.room, id: r.id, token: r.token, name: r.name };
   store.set("session", S, true);
+  store.set("pw", password || "", true);   // this tab only, for auto-rejoin
   store.set("last", { name, room: r.room });
   history.replaceState(null, "", "#" + encodeURIComponent(r.room));
   connect();
@@ -263,18 +371,22 @@ function connect() {
   es.onopen = () => setStatus(true);
   es.onmessage = e => handle(JSON.parse(e.data));
   es.onerror = () => {
+    if (unloading) return;               // the page is reloading or closing
     setStatus(false);
     if (es.readyState === EventSource.CLOSED) rejoin();   // seat expired
   };
 }
+// A reload closes the live stream; don't mistake that for losing the seat.
+let unloading = false;
+addEventListener("pagehide", () => { unloading = true; });
+addEventListener("pageshow", () => { unloading = false; });
 
 async function rejoin() {
-  if (rejoining || !S) return;
+  if (rejoining || !S || unloading) return;
   rejoining = true;
   es && es.close();
   const { name, room } = store.get("last") || {};
-  store.del("session");
-  try { await join(name, room); }
+  try { await join(name, room, store.get("pw") || ""); }   // join() saves the new session
   catch (e) { showJoin(e.message); }
   finally { rejoining = false; }
 }
@@ -293,36 +405,159 @@ function handle(m) {
       $("#join").classList.add("hidden");
       $("#app").classList.remove("hidden");
       $("#roomPill").textContent = "Group: " + m.room;
+      setLock(m.locked);
       setPeers(m.peers, m.max);
+      setAlerts(m.alerts || []);
+      ownerNote();
       setNotes(m.notes, m.notesBy);
       setJobs(m.jobs);
       sendHelperState();
+      sendSpecs();
       break;
     case "peers": setPeers(m.peers); break;
+    case "files": setFiles(m); break;
     case "chat": addChat(m); break;
     case "notes": setNotes(m.text, m.byName); break;
     case "jobs": setJobs(m.jobs); break;
     case "task": runTask(m); break;
     case "job_done": jobDone(m); break;
+    case "alert": addAlert(m.alert); break;
+    case "alerts": setAlerts(m.alerts); break;
+    case "locked": setLock(m.locked); break;
+    case "kicked":
+      es && es.close(); S = null; store.del("session"); store.del("pw");
+      showJoin("The group owner removed you from this group.");
+      break;
   }
 }
+
+function setLock(locked) {
+  $("#lockPill").textContent = locked ? "🔒 Password protected" : "🔓 Open group";
+  $("#lockPill").title = locked ? "People need the group password to join." : "Anyone with the group code can join.";
+}
+
+// ---------------- group owner & alerts ----------------
+let ownerId = null, alerts = [], unseenAlerts = 0, ownerNoteFor = null;
+const amOwner = () => !!S && ownerId === S.id;
+const fmtTime = ts => window.crewPrefs ? crewPrefs.formatTime(ts) : new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+// Everyone is told who gets the alerts, so nobody is watched without knowing.
+function ownerNote() {
+  const o = peers.find(p => p.owner);
+  if (!o || ownerNoteFor === S.id) return;
+  ownerNoteFor = S.id;
+  addChat({ system: true, text: o.id === S.id
+    ? "You started this group, so you're its owner. You'll get alerts about suspicious activity in the Alerts tab."
+    : `${o.name} owns this group and gets alerts about suspicious activity (risky links, spam, wiped notes, risky job code).` });
+}
+
+function updateOwnerUI() {
+  $("#alertsTab").classList.toggle("hidden", !amOwner());
+  if (!amOwner() && tab === "alerts") document.querySelector('.tabs button[data-tab="chat"]').click();
+  renderAlerts();
+}
+function setAlerts(list) {
+  alerts = list.slice(-100);
+  unseenAlerts = tab === "alerts" ? 0 : alerts.length;
+  renderAlerts();
+}
+function addAlert(a) {
+  alerts.push(a);
+  if (alerts.length > 100) alerts.shift();
+  if (tab !== "alerts") unseenAlerts++;
+  renderAlerts();
+  toast(a);
+  window.crewPrefs?.notify("Suspicious activity", (a.whoName ? a.whoName + " " : "") + a.text);
+}
+const alertLine = a => (a.whoName ? a.whoName + " " : "") + a.text + ".";
+
+function renderAlerts() {
+  const c = $("#alertCount");
+  c.textContent = unseenAlerts; c.classList.toggle("hidden", !unseenAlerts);
+  const box = $("#alertList");
+  if (!alerts.length) { box.className = "muted"; box.textContent = "Nothing suspicious so far."; return; }
+  box.className = "";
+  box.replaceChildren(...alerts.slice().reverse().map(a => {
+    const actions = el("div", { className: "row", style: "margin-top:6px" });
+    if (a.who && a.who !== S.id && peers.some(p => p.id === a.who))
+      actions.append(el("button", { className: "small", textContent: `Remove ${a.whoName} from group`, onclick: () => kick(a.who, a.whoName) }));
+    if (a.restore)
+      actions.append(el("button", { className: "small", textContent: "Restore the deleted notes", onclick: () => send({ type: "restore_notes" }).catch(e => alert(e.message)) }));
+    if (a.job && jobs.some(j => j.id === a.job && j.state === "running"))
+      actions.append(el("button", { className: "small", textContent: "Cancel this job", onclick: () => send({ type: "cancel", job: a.job }).catch(e => alert(e.message)) }));
+    const node = el("div", { className: "alert lvl-" + a.level },
+      el("div", { className: "row" },
+        el("span", { className: "lvl", textContent: { high: "High", medium: "Medium", low: "Low" }[a.level] || a.level }),
+        el("b", { textContent: a.area }),
+        el("span", { className: "muted", textContent: fmtTime(a.ts) })),
+      el("div", { textContent: alertLine(a), style: "margin-top:4px" }));
+    if (a.excerpt) node.append(el("div", { className: "result mono", textContent: a.excerpt }));
+    if (actions.childNodes.length) node.append(actions);
+    return node;
+  }));
+}
+
+function toast(a) {
+  let box = $("#toasts");
+  if (!box) { box = el("div", { id: "toasts" }); document.body.append(box); }
+  const t = el("div", { className: "toast lvl-" + a.level, role: "alert" },
+    el("b", { textContent: "⚠ Suspicious activity: " + a.area }),
+    el("div", { textContent: alertLine(a), style: "margin-top:2px" }),
+    el("div", { className: "row", style: "margin-top:8px;gap:8px" },
+      el("button", { className: "small primary", textContent: "View", onclick: () => { document.querySelector('.tabs button[data-tab="alerts"]').click(); t.remove(); } }),
+      el("button", { className: "small", textContent: "Dismiss", onclick: () => t.remove() })));
+  box.append(t);
+  while (box.children.length > 3) box.firstChild.remove();
+  setTimeout(() => t.remove(), 15000);
+}
+
+function kick(id, name) {
+  if (!confirm(`Remove ${name} from the group?\n\nThis browser won't be able to rejoin while the group is open. If they know the group password, change it too (in the Alerts tab).`)) return;
+  send({ type: "kick", peer: id }).catch(e => alert(e.message));
+}
+
+$("#alertsTab").addEventListener("click", () => { unseenAlerts = 0; renderAlerts(); });
+$("#clearAlerts").addEventListener("click", () => {
+  if (alerts.length && confirm("Clear all alerts?")) send({ type: "clear_alerts" }).catch(e => alert(e.message));
+});
+$("#pwForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const pw = $("#newPw").value;
+  if (!pw && !confirm("Remove the password? Anyone with the group code will be able to join.")) return;
+  try {
+    await send({ type: "set_password", password: pw });
+    store.set("pw", pw, true);            // so this tab can still reconnect
+    $("#newPw").value = "";
+    $("#pwMsg").textContent = pw ? "Password changed. Tell the people you trust." : "Password removed.";
+  } catch (x) { $("#pwMsg").textContent = x.message; }
+});
 
 // ---------------- computers list ----------------
 let maxPeers = 12;
 function setPeers(list, max) {
   if (max) maxPeers = max;
   peers = list;
+  ownerId = (list.find(p => p.owner) || {}).id || null;
   $("#countPill").textContent = `${list.length} / ${maxPeers} computers`;
   const box = $("#peerList");
   box.replaceChildren(...list.map(p => {
-    const row = el("div", { className: "peer" },
+    const short = specSummary(p.specs);
+    const row = el("div", { className: "peer", title: specDetails(p.specs) },
       el("span", { className: "dot" + (p.online ? "" : " off"), title: p.online ? "Online" : "Reconnecting" }),
-      el("span", { className: "name", textContent: p.name + (p.id === S.id ? " (you)" : "") }));
+      el("span", { className: "who" },
+        el("span", { className: "name", textContent: p.name + (p.id === S.id ? " (you)" : "") }),
+        ...(short ? [el("span", { className: "spec", textContent: short })] : [])));
+    if (p.owner) row.insertBefore(el("span", { className: "crown", textContent: "👑", title: "Group owner" }), row.children[2] || null);
     if (p.worker) row.append(el("span", { className: "badge help", textContent: `helping · ${p.completed}`, title: `${p.completed} pieces finished` }));
     return row;
   }));
-  // recipient picker
-  const sel = $("#chatTo"), prev = sel.value;
+  updateOwnerUI();
+  fillRecipients($("#chatTo"), list);
+  fillRecipients($("#fileTo"), list);
+  renderProcs();
+}
+function fillRecipients(sel, list) {
+  const prev = sel.value;
   sel.replaceChildren(el("option", { value: "", textContent: "Everyone" }),
     ...list.filter(p => p.id !== S.id).map(p => el("option", { value: p.id, textContent: "Only " + p.name })));
   sel.value = list.some(p => p.id === prev) ? prev : "";
@@ -333,15 +568,16 @@ function addChat(m) {
   const box = $("#messages");
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
   let node;
+  const ts = m.ts || Date.now();
+  const time = el("time", { dateTime: new Date(ts).toISOString(), textContent: fmtTime(ts) });
   if (m.system) {
-    node = el("div", { className: "msg sys", textContent: m.text });
+    node = el("div", { className: "msg sys" }, time, m.text);
   } else {
     const mine = m.from === S.id;
     let who = mine ? "You" : m.fromName;
     if (m.to) who += mine ? ` → ${m.toName} (private)` : " (private, to you)";
-    const time = new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     node = el("div", { className: "msg" + (mine ? " me" : "") + (m.to ? " dm" : "") },
-      el("span", { className: "who", textContent: `${who} · ${time}` }), m.text);
+      el("span", { className: "who" }, el("span", { className: "nm", textContent: who }), time), m.text);
   }
   box.append(node);
   if (atBottom || m.from === S.id) box.scrollTop = box.scrollHeight;
@@ -379,22 +615,120 @@ $("#notes").addEventListener("input", () => {
   }, 300);
 });
 
+// ---------------- shared files ----------------
+let files = [], seenFiles = null, newFiles = 0, fileMax = 25e6;
+function fmtSize(n) {
+  return n < 1000 ? n + " bytes" : n < 1e6 ? (n / 1e3).toFixed(1) + " KB" : (n / 1e6).toFixed(1) + " MB";
+}
+function showNewFiles() {
+  const u = $("#newFiles");
+  u.textContent = newFiles; u.classList.toggle("hidden", !newFiles);
+}
+function setFiles(m) {
+  files = m.files; fileMax = m.max;
+  $("#fileMax").textContent = fmtSize(m.max);
+  $("#fileUsage").textContent = `Group storage: ${fmtSize(m.used)} of ${fmtSize(m.quota)} used`;
+  if (seenFiles && tab !== "files")
+    newFiles += files.filter(f => !seenFiles.has(f.id) && f.owner !== S.id).length;
+  seenFiles = new Set(files.map(f => f.id));
+  showNewFiles();
+  const box = $("#fileList");
+  if (!files.length) { box.className = "muted"; box.textContent = "No files yet."; return; }
+  box.className = "";
+  box.replaceChildren(...files.slice().sort((a, b) => b.ts - a.ts).map(f => {
+    const mine = f.owner === S.id;
+    let line = `${fmtSize(f.size)} · from ${mine ? "you" : f.ownerName + (f.ownerHere ? "" : " (left)")}`;
+    if (f.to) line += mine ? ` → ${f.toName} (private)` : " (private, to you)";
+    line += " · " + new Date(f.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const actions = el("div", { className: "row" },
+      el("button", { className: "small primary", textContent: "Download", onclick: e => downloadFile(f, e.target) }));
+    if (mine || !f.ownerHere) actions.append(el("button", { className: "small", textContent: "Delete", onclick: async () => {
+      if (!confirm(`Delete "${f.name}"${f.to ? "" : " for everyone"}?`)) return;
+      try { await send({ type: "delete_file", file: f.id }); } catch (x) { alert(x.message); }
+    } }));
+    return el("div", { className: "file" },
+      el("div", { className: "info" }, el("b", { textContent: f.name }),
+        el("div", { className: "muted", style: "font-size:13px", textContent: line })),
+      actions);
+  }));
+}
+
+async function downloadFile(f, btn) {
+  const q = new URLSearchParams({ room: S.room, id: S.id, token: S.token, file: f.id });
+  btn.disabled = true; btn.textContent = "Downloading…";
+  try {
+    const r = await fetch("/api/file?" + q);
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+    const a = el("a", { href: URL.createObjectURL(await r.blob()), download: f.name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch (x) { alert("Couldn't download: " + x.message); }
+  finally { btn.disabled = false; btn.textContent = "Download"; }
+}
+
+function uploadFiles(list) {
+  const to = $("#fileTo").value;
+  for (const file of list) uploadFile(file, to);
+}
+function uploadFile(file, to) {
+  const bar = el("div", { style: "width:0%" });
+  const status = el("span", { className: "muted", textContent: " · starting…" });
+  const row = el("div", { className: "upload" }, el("b", { textContent: file.name }), status, el("div", { className: "bar" }, bar));
+  $("#uploads").append(row);
+  const fail = msg => {
+    status.textContent = " · not sent: " + msg; status.className = "error"; status.style.margin = "0";
+    bar.parentNode.remove(); setTimeout(() => row.remove(), 10000);
+  };
+  if (file.size > fileMax) return fail(`too big (max ${fmtSize(fileMax)})`);
+  const q = new URLSearchParams({ room: S.room, id: S.id, token: S.token, name: file.name, to });
+  const xhr = new XMLHttpRequest();            // XHR (not fetch) for upload progress
+  xhr.open("POST", "/api/upload?" + q);
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    const pct = Math.round(100 * e.loaded / e.total);
+    bar.style.width = pct + "%"; status.textContent = ` · ${pct}%`;
+  };
+  xhr.onload = () => {
+    if (xhr.status === 200) return row.remove();
+    let msg; try { msg = JSON.parse(xhr.responseText).error; } catch {}
+    fail(msg || xhr.statusText || "upload failed");
+    if (xhr.status === 401) rejoin();
+  };
+  xhr.onerror = () => fail("connection problem");
+  xhr.send(file);
+}
+
+$("#fileInput").addEventListener("change", e => { uploadFiles(e.target.files); e.target.value = ""; });
+{
+  const pane = $("#tab-files");
+  const hasFiles = e => [...(e.dataTransfer?.types || [])].includes("Files");
+  pane.addEventListener("dragover", e => { if (hasFiles(e)) { e.preventDefault(); pane.classList.add("dragging"); } });
+  pane.addEventListener("dragleave", e => { if (!pane.contains(e.relatedTarget)) pane.classList.remove("dragging"); });
+  pane.addEventListener("drop", e => { e.preventDefault(); pane.classList.remove("dragging"); if (S) uploadFiles(e.dataTransfer.files); });
+  // Elsewhere on the page, don't let a dropped file replace the app.
+  window.addEventListener("dragover", e => { if (hasFiles(e)) e.preventDefault(); });
+  window.addEventListener("drop", e => { if (hasFiles(e)) e.preventDefault(); });
+}
+
 // ---------------- helper (worker) side ----------------
 const cores = navigator.hardwareConcurrency || 2;
 for (let i = 1; i <= Math.min(cores, 16); i++) $("#slots").append(el("option", { value: i, textContent: i }));
 $("#slots").value = Math.max(1, Math.min(cores - 1, 4));
 $("#helpToggle").checked = !!store.get("helping");
-$("#helpToggle").addEventListener("change", () => { store.set("helping", $("#helpToggle").checked); sendHelperState(); });
+$("#helpToggle").addEventListener("change", () => {
+  store.set("helping", $("#helpToggle").checked);
+  if (!$("#helpToggle").checked) closePools();   // free idle sandboxes' memory
+  sendHelperState();
+});
 $("#slots").addEventListener("change", sendHelperState);
 function sendHelperState() {
   if (!S) return;
   send({ type: "worker", on: $("#helpToggle").checked, slots: +$("#slots").value }).catch(() => {});
 }
 
-// Runs `fnName(...args)` from `code` in a sandboxed Web Worker.
-function runSandboxed(code, fnName, args, ms = 60000) {
-  return new Promise(resolve => {
-    const src = code + `
+// A Web Worker script that runs `fnName(...args)` from `code` for each message it gets.
+function sandboxURL(code, fnName) {
+  const src = code + `
 ;self.onmessage = async e => {
   try {
     if (typeof ${fnName} !== "function") throw new Error("Your code must define function ${fnName}(...)");
@@ -402,15 +736,45 @@ function runSandboxed(code, fnName, args, ms = 60000) {
     self.postMessage({ ok: true, value: value === undefined ? null : value });
   } catch (err) { self.postMessage({ ok: false, error: String(err && err.message || err) }); }
 };`;
-    const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
-    let w;
-    const done = r => { clearTimeout(timer); w && w.terminate(); URL.revokeObjectURL(url); resolve(r); };
-    const timer = setTimeout(() => done({ ok: false, error: `Timed out after ${ms / 1000}s` }), ms);
-    try { w = new Worker(url); } catch (e) { return done({ ok: false, error: String(e) }); }
-    w.onmessage = e => done(e.data);
-    w.onerror = e => { e.preventDefault(); done({ ok: false, error: e.message || "Script error" }); };
+  return URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+}
+
+// Runs one call in worker `w`. Resolves {ok, value, error, alive}. A worker that
+// timed out or crashed is terminated and comes back with alive: false.
+function callWorker(w, args, ms) {
+  return new Promise(resolve => {
+    const done = (r, alive) => {
+      clearTimeout(timer); w.onmessage = w.onerror = null;
+      if (!alive) w.terminate();
+      resolve({ ...r, alive });
+    };
+    const timer = setTimeout(() => done({ ok: false, error: `Timed out after ${ms / 1000}s` }, false), ms);
+    w.onmessage = e => done(e.data, true);
+    w.onerror = e => { e.preventDefault(); done({ ok: false, error: e.message || "Script error" }, false); };
     w.postMessage(args);
   });
+}
+
+// One-off call (speed test, combine): a fresh sandbox, thrown away afterwards.
+async function runSandboxed(code, fnName, args, ms = 60000) {
+  const url = sandboxURL(code, fnName);
+  let w;
+  try { w = new Worker(url); } catch (e) { URL.revokeObjectURL(url); return { ok: false, error: String(e) }; }
+  const r = await callWorker(w, args, ms);
+  w.terminate(); URL.revokeObjectURL(url);
+  return r;
+}
+
+// Helpers keep the sandboxes for a job, with its code already loaded, so each
+// piece doesn't pay to start a new one. Closed when the job stops running.
+const pools = {};        // job id -> { url, idle: [Worker] }
+function closePools(keep = () => false) {
+  for (const [id, p] of Object.entries(pools)) {
+    if (keep(id)) continue;
+    delete pools[id];
+    p.idle.forEach(w => w.terminate());
+    URL.revokeObjectURL(p.url);
+  }
 }
 
 async function runTask(m) {
@@ -418,7 +782,12 @@ async function runTask(m) {
   const code = jobCode[m.job];
   if (!code) return send({ type: "result", job: m.job, task: m.task, needCode: true }).catch(() => {});
   running++; updateHere();
-  const r = await runSandboxed(code, "work", [m.input]);
+  const pool = pools[m.job] ||= { url: sandboxURL(code, "work"), idle: [] };
+  let w = pool.idle.pop(), r;
+  try { w ||= new Worker(pool.url); r = await callWorker(w, [m.input], 60000); }
+  catch (e) { r = { ok: false, error: String(e), alive: false }; }
+  if (r.alive && pools[m.job] === pool) pool.idle.push(w);   // keep it for the next piece
+  else if (w) w.terminate();
   running--; doneHere++; updateHere();
   send({ type: "result", job: m.job, task: m.task, ok: r.ok, value: r.value, error: r.error }).catch(() => {});
 }
@@ -427,9 +796,112 @@ function updateHere() {
   $("#doneHere").textContent = doneHere;
 }
 
+// ---------------- processor details ----------------
+let mySpecs = null, benching = null;
+$("#shareSpecs").checked = store.get("shareSpecs") !== false;   // on unless turned off
+$("#shareSpecs").addEventListener("change", () => { store.set("shareSpecs", $("#shareSpecs").checked); sendSpecs(); });
+$("#benchBtn").addEventListener("click", async () => { await benchmark(); sendSpecs(); });
+
+async function gatherSpecs() {
+  const s = { cores: navigator.hardwareConcurrency, memory: navigator.deviceMemory };
+  const uad = navigator.userAgentData;
+  if (uad) {
+    try {
+      const h = await uad.getHighEntropyValues(["architecture", "bitness"]);
+      s.platform = uad.platform;
+      s.arch = [h.architecture, h.bitness && h.bitness + "-bit"].filter(Boolean).join(" ");
+    } catch {}
+    const b = (uad.brands || []).find(b => !/not.?a.?brand|chromium/i.test(b.brand)) || (uad.brands || [])[0];
+    if (b) s.browser = `${b.brand} ${b.version}`;
+  }
+  if (!s.platform) s.platform = navigator.platform;
+  if (!s.browser) {
+    const ua = navigator.userAgent, m = ua.match(/(Edg|Firefox|Chrome)\/(\d+)/), v = ua.match(/Version\/(\d+).*Safari/);
+    s.browser = m ? `${m[1] === "Edg" ? "Edge" : m[1]} ${m[2]}` : v ? `Safari ${v[1]}` : "";
+  }
+  try {
+    const gl = document.createElement("canvas").getContext("webgl");
+    const ext = gl && gl.getExtension("WEBGL_debug_renderer_info");
+    s.gpu = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl ? gl.getParameter(gl.RENDERER) : "";
+  } catch {}
+  return s;
+}
+
+// A fixed 1-second workload; the score is rounds finished per second on one core.
+const BENCH = `function work(ms) {
+  const end = performance.now() + ms;
+  let rounds = 0, x = 0;
+  while (performance.now() < end) {
+    for (let i = 1; i <= 20000; i++) x = (x + Math.sqrt(i) * (i & 7)) % 1e9;
+    rounds++;
+  }
+  return x < 0 ? 0 : Math.round(rounds * 1000 / ms);
+}`;
+function benchmark() {
+  if (!benching) {
+    $("#benchBtn").disabled = true; $("#myScore").textContent = "Testing speed…";
+    benching = runSandboxed(BENCH, "work", [1000], 15000).then(r => {
+      if (r.ok && r.value > 0) store.set("bench", r.value);
+      benching = null; $("#benchBtn").disabled = false; showMyScore();
+      return store.get("bench");
+    });
+  }
+  return benching;
+}
+function showMyScore() {
+  const s = store.get("bench");
+  $("#myScore").textContent = s ? `Speed: ${s.toLocaleString()}` : "";
+}
+showMyScore();
+
+async function sendSpecs() {
+  if (!S) return;
+  if (!$("#shareSpecs").checked) return send({ type: "specs", specs: null }).catch(() => {});
+  mySpecs = mySpecs || await gatherSpecs();
+  const score = store.get("bench");
+  send({ type: "specs", specs: { ...mySpecs, score } }).catch(() => {});
+  if (!score && await benchmark() && S && $("#shareSpecs").checked)   // first visit: measure, then share
+    send({ type: "specs", specs: { ...mySpecs, score: store.get("bench") } }).catch(() => {});
+}
+
+function specSummary(s) {
+  if (!s) return "";
+  return [s.cores && `${s.cores} cores`, s.memory && `${s.memory} GB`, s.score && `speed ${s.score.toLocaleString()}`]
+    .filter(Boolean).join(" · ");
+}
+function specDetails(s) {
+  if (!s) return "Processor details not shared";
+  return [s.cores && `Cores: ${s.cores}`, s.memory && `Memory: ${s.memory} GB`,
+    s.score && `Speed: ${s.score.toLocaleString()}`, (s.platform || s.arch) && `System: ${[s.platform, s.arch].filter(Boolean).join(" ")}`,
+    s.browser && `Browser: ${s.browser}`, s.gpu && `Graphics: ${s.gpu}`].filter(Boolean).join("\n");
+}
+function renderProcs() {
+  const dash = "—";
+  const best = Math.max(1, ...peers.map(p => p.specs?.score || 0));
+  $("#procRows").replaceChildren(...peers.map(p => {
+    const s = p.specs || {};
+    const speed = el("td", { textContent: s.score ? s.score.toLocaleString() : dash });
+    if (s.score) speed.append(el("span", { className: "speed", style: `width:${Math.max(3, Math.round(40 * s.score / best))}px` }));
+    return el("tr", { title: specDetails(p.specs) },
+      el("td", { textContent: p.name + (p.id === S.id ? " (you)" : "") }),
+      el("td", { textContent: s.cores || (p.specs ? dash : "not shared") }),
+      el("td", { textContent: s.memory ? s.memory + " GB" : dash }),
+      speed,
+      el("td", { textContent: [s.platform, s.arch].filter(Boolean).join(" ") || dash }),
+      el("td", { textContent: p.worker ? `yes, ${p.slots} at once` : "no" }),
+      el("td", { className: "gpu", textContent: s.gpu || dash }));
+  }));
+  const shared = peers.filter(p => p.specs);
+  const totalCores = shared.reduce((a, p) => a + (p.specs.cores || 0), 0);
+  const slots = peers.filter(p => p.worker && p.online).reduce((a, p) => a + p.slots, 0);
+  $("#procTotals").textContent = `${shared.length} of ${peers.length} computers sharing details · ` +
+    `${totalCores} cores in total · helpers can run ${slots} piece${slots === 1 ? "" : "s"} at once`;
+}
+
 // ---------------- jobs (owner side) ----------------
 function setJobs(list) {
   jobs = list;
+  closePools(id => list.some(j => j.id === id && j.state === "running"));
   const box = $("#jobList");
   if (!list.length) { box.className = "muted"; box.textContent = "No jobs yet."; return; }
   box.className = "";
@@ -559,6 +1031,7 @@ document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click
   document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
   document.querySelectorAll(".pane").forEach(p => p.classList.toggle("hidden", p.id !== "tab-" + tab));
   if (tab === "chat") { unread = 0; showUnread(); }
+  if (tab === "files") { newFiles = 0; showNewFiles(); }
 }));
 
 $("#inviteBtn").addEventListener("click", async () => {
@@ -570,7 +1043,7 @@ $("#inviteBtn").addEventListener("click", async () => {
 
 $("#leaveBtn").addEventListener("click", async () => {
   try { await api("/api/leave", S); } catch {}
-  es && es.close(); S = null; store.del("session");
+  es && es.close(); S = null; store.del("session"); store.del("pw");
   showJoin("");
 });
 
@@ -578,13 +1051,15 @@ function showJoin(msg) {
   $("#app").classList.add("hidden");
   $("#join").classList.remove("hidden");
   $("#messages").replaceChildren();
+  $("#uploads").replaceChildren();
+  seenFiles = null; newFiles = 0; showNewFiles();
   $("#joinErr").textContent = msg || "";
 }
 
 $("#joinForm").addEventListener("submit", async e => {
   e.preventDefault();
   const btn = $("#joinBtn"); btn.disabled = true; $("#joinErr").textContent = "";
-  try { await join($("#jName").value, $("#jRoom").value); }
+  try { await join($("#jName").value, $("#jRoom").value, $("#jPass").value); }
   catch (x) { $("#joinErr").textContent = x.message; }
   finally { btn.disabled = false; }
 });
