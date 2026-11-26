@@ -6,6 +6,10 @@ Zero dependencies (Python 3.8+ standard library only).
 
     python3 server.py            # serves on port 8000
     python3 server.py 9000       # or pick a port
+    python3 server.py --claude   # also give everyone a Claude Code tab: each
+                                 # person signs in with their own Claude account
+                                 # and gets their own folder under ~/crew-workspace
+                                 # (or --claude FOLDER); see claude_bridge.py
 
 Then on every computer, open  http://<this-computer's-IP>:8000
 and join the same group code.
@@ -28,6 +32,8 @@ import queue
 import re
 import secrets
 import socket
+import ssl
+import subprocess
 import sys
 import threading
 import time
@@ -35,9 +41,18 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
+import browse                    # the Browse tab's page fetcher (browse.py)
+import claude_bridge             # the Claude Code tab (claude_bridge.py)
+import codeshare                 # the Code tab's shared editor (codeshare.py)
+import terminal_support          # the Terminal tab: Python files + input (terminal_support.py)
+import mail                      # the Mail tab (mail.py)
+
 MAX_PEERS = 12           # computers per group
 GRACE_SECONDS = 30       # a dropped computer keeps its seat this long
 TASK_TIMEOUT = 180       # seconds before a stuck task is handed to someone else
+BACKUP_AFTER = 3         # a piece is never backed up before running this long (s)
+BACKUP_SLOW = 1.5        # ...and only once it's this many times slower than usual
+BACKUP_NO_DATA = 10      # ...or, before any piece has finished, after this long
 MAX_TASKS = 5000         # pieces per job
 MAX_CODE = 100_000       # characters of job code
 MAX_BODY = 4_000_000     # bytes per request
@@ -45,13 +60,76 @@ PING_EVERY = 15          # keep-alive interval for the live stream
 MAX_FILE = 25_000_000    # bytes per shared file
 MAX_GROUP_FILES = 250_000_000   # bytes of shared files per group (kept in memory)
 MAX_FILE_COUNT = 200     # shared files per group
+E2E_PREFIX = "e2e1:"     # marks text the browsers encrypted (see e2e.js)
+E2E_CHAT_MAX = 24_000    # encrypted chat message (4,000 characters before)
+E2E_NOTES_MAX = 1_200_000   # encrypted shared notes (200,000 characters before)
 LIST_DELAY = 0.2         # computer/job lists go out at most this often
 ALERT_COOLDOWN = 60      # the same alert about the same person repeats at most this often
 STATIC = {"/prefs.css": "text/css; charset=utf-8",
-          "/prefs.js": "text/javascript; charset=utf-8"}
+          "/prefs.js": "text/javascript; charset=utf-8",
+          "/browse.js": "text/javascript; charset=utf-8",
+          "/claude.js": "text/javascript; charset=utf-8",
+          "/e2e.js": "text/javascript; charset=utf-8",
+          "/code.js": "text/javascript; charset=utf-8",
+          "/codechat.js": "text/javascript; charset=utf-8",
+          "/terminal.js": "text/javascript; charset=utf-8",
+          "/mail.js": "text/javascript; charset=utf-8"}
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PORT = int(sys.argv[1] if len(sys.argv) > 1 else os.environ.get("PORT", 8000))
+
+
+def parse_args(argv):
+    """[port] [--claude [FOLDER]] [--cert FILE --key FILE] [--no-tls]"""
+    opts = {"port": os.environ.get("PORT", 8000), "claude": None,
+            "cert": None, "key": None, "tls": True}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        name = a[2:].split("=", 1)[0] if a.startswith("--") else None
+        if a == "--claude" and (i + 1 >= len(argv) or argv[i + 1].startswith("--")
+                                or argv[i + 1].isdigit()):
+            opts["claude"], i = "", i + 1     # no folder given: the default workspace
+        elif name in ("claude", "cert", "key"):
+            if "=" in a:
+                opts[name], i = a.split("=", 1)[1], i + 1
+            elif i + 1 < len(argv):
+                opts[name], i = argv[i + 1], i + 2
+            else:
+                sys.exit(f"--{name} needs a value")
+        elif a == "--no-tls":
+            opts["tls"], i = False, i + 1
+        elif name is not None:
+            sys.exit(f"Unknown option {a}")
+        else:
+            opts["port"], i = a, i + 1
+    if bool(opts["cert"]) != bool(opts["key"]):
+        sys.exit("--cert and --key go together")
+    opts["port"] = int(opts["port"])
+    return opts
+
+
+OPTS = parse_args(sys.argv[1:])
+PORT, CLAUDE_DIR = OPTS["port"], OPTS["claude"]
+
+# Sent with every response (except Browse pages, which have their own rules).
+# They keep CREW's page from loading or sending anything to other sites, from
+# being framed by another site, and from leaking its address in Referer.
+SECURITY_HEADERS = {
+    "Content-Security-Policy":
+        # 'wasm-unsafe-eval' lets the Terminal run Python (WebAssembly). It does
+        # not allow eval() or new Function().
+        "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+        "worker-src blob:; connect-src 'self'; frame-src 'self'; "
+        "object-src 'none'; base-uri 'none'; form-action 'self'; "
+        "frame-ancestors 'none'",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), "
+                          "payment=(), usb=()",
+}
 
 lock = threading.RLock()
 rooms = {}
@@ -205,6 +283,7 @@ class SharedFile:
         self.data = data
         self.size = len(data)
         self.ts = now() * 1000
+        self.meta = ""                       # encrypted real name (e2e.js)
 
     def visible_to(self, pid):
         return self.to is None or pid in (self.to, self.owner)
@@ -214,7 +293,7 @@ class SharedFile:
                 "ts": self.ts, "owner": self.owner,
                 "ownerName": self.owner_name,
                 "ownerHere": self.owner in room.peers,
-                "to": self.to, "toName": self.to_name}
+                "to": self.to, "toName": self.to_name, "meta": self.meta}
 
 
 class Peer:
@@ -243,23 +322,45 @@ class Peer:
 
 
 class Job:
-    def __init__(self, jid, owner, title, code, combine, inputs):
+    def __init__(self, jid, owner, title, code, combine, inputs, verify=False):
         self.id = jid
         self.owner = owner
         self.title = title
         self.code = code
         self.combine = combine
         self.inputs = inputs
-        self.tasks = [{"state": "pending", "worker": None, "started": 0}
+        self.verify = verify             # every piece needs 2 matching answers
+        # runs: helper id -> start time for each copy out now
+        # answers: [(helper id, ok, value)] received so far
+        # tried: every helper ever given this piece
+        self.tasks = [{"state": "pending", "worker": None, "runs": {},
+                       "answers": [], "tried": set(), "queued": True}
                       for _ in inputs]
         self.pending = deque(range(len(inputs)))
         self.results = [None] * len(inputs)
-        self.running = 0                 # tasks currently out with helpers
+        self.running = 0                 # copies currently out with helpers
         self.done = 0
         self.errors = 0
+        self.backups = 0                 # slow pieces also sent to a 2nd computer
+        self.disagreed = 0               # pieces where computers' answers differed
+        self.durations = deque(maxlen=50)   # seconds per successful piece
         self.code_sent = set()
         self.state = "running"
         self.created = now()
+
+    def wanted(self, i):
+        """How many more copies of piece i should be sent out right now."""
+        t = self.tasks[i]
+        if t["state"] == "done" or self.state != "running":
+            return 0
+        need = 2 if self.verify and not t["answers"] else 1
+        return need - len(t["runs"])
+
+    def typical(self):
+        """Median seconds a piece of this job takes, or None if unknown."""
+        if not self.durations:
+            return None
+        return sorted(self.durations)[len(self.durations) // 2]
 
     def summary(self, room):
         owner = room.peers.get(self.owner)
@@ -267,7 +368,8 @@ class Job:
                 "ownerName": owner.name if owner else "(left)",
                 "total": len(self.tasks), "done": self.done,
                 "errors": self.errors, "state": self.state,
-                "running": self.running}
+                "running": self.running, "verify": self.verify,
+                "backups": self.backups, "disagreed": self.disagreed}
 
 
 class Room:
@@ -280,6 +382,7 @@ class Room:
         self.job_seq = 0
         self.pw_salt = b""
         self.pw_hash = b""                    # empty = no password
+        self.e2e_wrapped = None               # group key, locked with the password
         self.files = {}
         self.file_bytes = 0
         self.assigned = {}                    # peer id -> {(job id, task)} running there
@@ -323,9 +426,11 @@ class Room:
             owner.send({"type": "alert", "alert": a})
 
     def set_owner(self, peer):
+        old = self.owner
         self.owner = peer.id if peer else None
         if peer:
             peer.send({"type": "alerts", "alerts": list(self.alerts)})
+        claude_bridge.owner_changed(self, old)
         self.announce_peers()
 
     # ---- messaging -------------------------------------------------
@@ -371,8 +476,9 @@ class Room:
                     "Delete some files first."), None
         return None, target
 
-    def add_file(self, peer, name, data, target):
+    def add_file(self, peer, name, data, target, meta=""):
         f = SharedFile(peer, name, data, target)
+        f.meta = meta                         # encrypted real name, if any
         self.files[f.id] = f
         self.file_bytes += f.size
         label = f"{name} ({human_size(f.size)})"
@@ -391,7 +497,8 @@ class Room:
             self.file_bytes -= f.size
 
     def peer_list(self):
-        return [{**p.info(), "owner": p.id == self.owner}
+        return [{**p.info(), "owner": p.id == self.owner,
+                 "browsing": browse.peer_info(p)}
                 for p in self.peers.values()]
 
     def job_list(self):
@@ -420,61 +527,190 @@ class Room:
     def load(self, pid):
         return len(self.assigned.get(pid, ()))
 
-    def start_task(self, job, i, pid):
-        job.tasks[i].update(state="running", worker=pid, started=now())
-        job.tasks[i].setdefault("tried", set()).add(pid)   # everyone ever given it
+    def queue(self, job, i, front=False):
+        """Put piece i back in line if it still needs a computer."""
+        t = job.tasks[i]
+        if not t["queued"] and job.wanted(i) > 0:
+            t["queued"] = True
+            (job.pending.appendleft if front else job.pending.append)(i)
+
+    def start_run(self, job, i, p):
+        t = job.tasks[i]
+        t["runs"][p.id] = now()
+        t["tried"].add(p.id)
+        t["state"] = "running"
         job.running += 1
-        self.assigned.setdefault(pid, set()).add((job.id, i))
+        self.assigned.setdefault(p.id, set()).add((job.id, i))
+        msg = {"type": "task", "job": job.id, "task": i,
+               "input": job.inputs[i]}
+        if p.id not in job.code_sent:
+            msg["code"] = job.code
+            job.code_sent.add(p.id)
+        p.send(msg)
 
-    def stop_task(self, job, i):
-        """Free the helper slot a running task holds (state is set by caller)."""
+    def stop_run(self, job, i, pid, abort=False):
+        """Free the helper slot one copy of piece i holds on computer pid.
+        With abort, also tell that computer to stop working on it."""
         t = job.tasks[i]
-        if t["state"] == "running":
-            job.running -= 1
-            self.assigned.get(t["worker"], set()).discard((job.id, i))
+        self.assigned.get(pid, set()).discard((job.id, i))
+        if t["runs"].pop(pid, None) is None:
+            return
+        job.running -= 1
+        if t["state"] == "running" and not t["runs"]:
+            t["state"] = "pending"
+        p = self.peers.get(pid)
+        if abort and p:
+            p.send({"type": "abort", "job": job.id, "task": i})
 
-    def requeue_task(self, job, i):
-        t = job.tasks[i]
-        if t["state"] == "running":
-            self.stop_task(job, i)
-            t.update(state="pending", worker=None, started=0)
-            if job.state == "running":
-                job.pending.appendleft(i)
+    def stop_all_runs(self, job, i):
+        for pid in list(job.tasks[i]["runs"]):
+            self.stop_run(job, i, pid, abort=True)
+
+    def requeue_run(self, job, i, pid, abort=False):
+        self.stop_run(job, i, pid, abort)
+        self.queue(job, i, front=True)
 
     def requeue_worker(self, pid):
         for jid, i in list(self.assigned.get(pid, ())):
             job = self.jobs.get(jid)
             if job:
-                self.requeue_task(job, i)
+                self.requeue_run(job, i, pid)
         self.assigned.pop(pid, None)
 
+    def cancel_job(self, job):
+        job.state = "cancelled"
+        job.pending.clear()
+        for i in range(len(job.tasks)):
+            self.stop_all_runs(job, i)       # free every helper slot right away
+
+    def add_answer(self, job, i, peer, ok, value):
+        """Record one computer's answer for piece i and decide it if we can."""
+        t = job.tasks[i]
+        started = t["runs"].get(peer.id)
+        self.stop_run(job, i, peer.id)
+        if ok and started:
+            job.durations.append(now() - started)
+        t["answers"].append((peer.id, ok, value))
+        answers = t["answers"]
+
+        if not job.verify:
+            if not ok and t["runs"]:
+                return                       # failed here; another copy is running
+            oks = [a for a in answers if a[1]]
+            return self.complete(job, i, oks[0] if oks else answers[-1])
+
+        groups = {}                          # identical answers grouped together
+        for a in answers:
+            key = json.dumps(a[2], sort_keys=True) if a[1] else "error"
+            groups.setdefault(key, []).append(a)
+        best = max(groups.values(), key=len)
+        if len(answers) == 2 and len(best) == 1:
+            job.disagreed += 1               # ask a third computer to break the tie
+            self.queue(job, i, front=True)
+            return
+        if len(best) >= 2:
+            winner = best[0]
+        elif len(answers) >= 3:
+            winner = (None, False, {"error": "Computers gave different "
+                                             "answers for this piece."})
+        else:
+            self.queue(job, i, front=True)   # first answer in; wait for a second
+            return
+        for pid, _, value in answers:        # report the odd one out
+            if winner[0] and (pid, _, value) not in best:
+                odd = self.peers.get(pid)
+                self.alert("Work together", "medium",   # once per job, not per piece
+                           f'gave different answers than other computers in '
+                           f'job "{job.title}"', odd,
+                           f"piece {i + 1}: " + json.dumps(value)[:200],
+                           job=job.id)
+        self.complete(job, i, winner)
+
+    def complete(self, job, i, winner):
+        pid, ok, value = winner
+        t = job.tasks[i]
+        t.update(state="done", worker=pid)
+        job.results[i] = value
+        job.done += 1
+        if not ok:
+            job.errors += 1
+        self.stop_all_runs(job, i)           # backup copies aren't needed now
+        if job.done == len(job.tasks):
+            self.finish(job)
+
     def schedule(self):
+        """Hand pieces to free helpers: fastest computers first, then send
+        backup copies of pieces that are running unusually slowly."""
         workers = [p for p in self.peers.values() if p.online and p.worker]
         if not workers:
             return
         load = {p.id: self.load(p.id) for p in workers}
+        known = sorted(p.specs["score"] for p in workers
+                       if p.specs and p.specs.get("score"))
+        usual = known[len(known) // 2] if known else 1
+        speed = {p.id: (p.specs or {}).get("score") or usual for p in workers}
+
+        def pick(t):
+            """The free helper that would finish soonest, not already on t."""
+            taken = t["runs"].keys() | {a[0] for a in t["answers"]}
+            free = [p for p in workers
+                    if load[p.id] < p.slots and p.id not in taken]
+            if not free:
+                return None
+            return min(free, key=lambda p: (load[p.id] + 1)
+                                           / (p.slots * speed[p.id]))
+
+        def any_free():
+            return any(load[p.id] < p.slots for p in workers)
+
         changed = False
-        for job in sorted(self.jobs.values(), key=lambda j: j.created):
-            if job.state != "running":
-                continue
-            while job.pending:
-                free = [p for p in workers if load[p.id] < p.slots]
-                if not free:
-                    break
+        running_jobs = sorted((j for j in self.jobs.values()
+                               if j.state == "running"), key=lambda j: j.created)
+        for job in running_jobs:
+            waiting = []                     # pieces no free helper can take
+            while job.pending and any_free():
                 i = job.pending.popleft()
                 t = job.tasks[i]
-                if t["state"] != "pending":
-                    continue
-                p = min(free, key=lambda p: load[p.id] / p.slots)
-                self.start_task(job, i, p.id)
-                load[p.id] += 1
-                msg = {"type": "task", "job": job.id, "task": i,
-                       "input": job.inputs[i]}
-                if p.id not in job.code_sent:
-                    msg["code"] = job.code
-                    job.code_sent.add(p.id)
-                p.send(msg)
-                changed = True
+                t["queued"] = False
+                while job.wanted(i) > 0:
+                    p = pick(t)
+                    if not p:
+                        break
+                    self.start_run(job, i, p)
+                    load[p.id] += 1
+                    changed = True
+                if job.wanted(i) > 0:
+                    t["queued"] = True
+                    waiting.append(i)
+            job.pending.extendleft(reversed(waiting))
+
+        # Backups: a free helper also starts a piece that's running far longer
+        # than this job's pieces usually take. First answer back wins.
+        if any_free():
+            slow = []
+            for job in running_jobs:
+                usual_s = job.typical()
+                limit = (max(BACKUP_AFTER, BACKUP_SLOW * usual_s)
+                         if usual_s is not None else BACKUP_NO_DATA)
+                for pid, jobs_here in self.assigned.items():
+                    for jid, i in jobs_here:
+                        t = job.tasks[i] if jid == job.id else None
+                        if (not t or len(t["runs"]) != 1 or t.get("backed")
+                                or job.wanted(i) < 0):
+                            continue
+                        took = now() - t["runs"].get(pid, now())
+                        if took > limit:
+                            slow.append((took / limit, job, i))
+            for _, job, i in sorted(slow, key=lambda s: -s[0]):
+                p = pick(job.tasks[i])
+                if p:
+                    job.tasks[i]["backed"] = True
+                    job.backups += 1
+                    self.start_run(job, i, p)
+                    load[p.id] += 1
+                    changed = True
+                if not any_free():
+                    break
         if changed:
             self.announce_jobs()
 
@@ -490,14 +726,14 @@ class Room:
 
     def remove_peer(self, peer, reason=None):
         self.peers.pop(peer.id, None)
+        claude_bridge.peer_left(self, peer)   # stop their Claude, forget their sign-in
         for key in [k for k in self.counters if k[0] == peer.id]:
             del self.counters[key]
         peer.q.put(None)                     # close its live stream
         self.requeue_worker(peer.id)
         for j in self.jobs.values():
             if j.owner == peer.id and j.state == "running":
-                j.state = "cancelled"
-                j.pending.clear()
+                self.cancel_job(j)
         for f in list(self.files.values()):   # nobody left to receive these
             if f.to == peer.id:
                 self.drop_file(f)
@@ -518,8 +754,23 @@ def dispatch(room, peer, m):
     """Handle one message from a computer. Returns an error string or None."""
     kind = m.get("type")
 
+    if kind in browse.TYPES:                 # sharing / following web pages
+        return browse.dispatch(room, peer, m, scan_text)
+
+    if kind in claude_bridge.TYPES:          # the owner's Claude Code tab
+        return claude_bridge.dispatch(room, peer, m)
+
+    if kind in mail.TYPES:                   # mail between group members
+        return mail.dispatch(room, peer, m)
+
+    if kind in codeshare.TYPES:              # shared editor and snippets
+        return codeshare.dispatch(room, peer, m, scan_code)
+
     if kind == "chat":
-        text = str(m.get("text", ""))[:4000].strip()
+        text = str(m.get("text", "")).strip()
+        sealed = text.startswith(E2E_PREFIX)  # end-to-end encrypted: unreadable here
+        if len(text) > (E2E_CHAT_MAX if sealed else 4000):
+            return "Message is too long."
         if not text:
             return "Empty message."
         out = {"type": "chat", "from": peer.id, "fromName": peer.name,
@@ -528,7 +779,7 @@ def dispatch(room, peer, m):
         if room.rate((peer.id, "chat"), 10, 8):
             room.alert("Chat", "medium", "is flooding the chat (more than 8 "
                        "messages in 10 seconds)", peer, text)
-        for level, why, ex in scan_text(text):
+        for level, why, ex in ([] if sealed else scan_text(text)):
             room.alert("Chat", level, why + (" in a private message" if to
                                              else ""), peer, ex)
         if to:
@@ -551,7 +802,10 @@ def dispatch(room, peer, m):
         return None
 
     if kind == "notes":
-        old, new = room.notes, str(m.get("text", ""))[:200_000]
+        old, new = room.notes, str(m.get("text", ""))
+        sealed = new.startswith(E2E_PREFIX)
+        if len(new) > (E2E_NOTES_MAX if sealed else 200_000):
+            return "The notes are too long."
         if len(old) >= 200 and len(new) < len(old) * 0.3:
             room.notes_backup = old           # the owner can put it back
             room.alert("Shared notes", "medium",
@@ -559,7 +813,7 @@ def dispatch(room, peer, m):
                        f"{len(new):,} characters)", peer, old[:200],
                        restore=True)
         seen = {why for _, why, _ in scan_text(old)}
-        for level, why, ex in scan_text(new):
+        for level, why, ex in ([] if sealed else scan_text(new)):
             if why not in seen:               # only newly added problems
                 room.alert("Shared notes", level,
                            why.replace("posted", "added"), peer, ex)
@@ -608,7 +862,9 @@ def dispatch(room, peer, m):
         if len(inputs) > MAX_TASKS:
             return f"Too many pieces (max {MAX_TASKS})."
         room.job_seq += 1
-        job = Job(str(room.job_seq), peer.id, title, code, combine, inputs)
+        verify = bool(m.get("verify"))
+        job = Job(str(room.job_seq), peer.id, title, code, combine, inputs,
+                  verify)
         room.jobs[job.id] = job
         if room.rate((peer.id, "job"), 60, 5):
             room.alert("Work together", "medium", "started more than 5 jobs "
@@ -617,13 +873,21 @@ def dispatch(room, peer, m):
             room.alert("Work together", level, f'started job "{title}", which '
                        f'{why}', peer, ex, job=job.id)
         room.system(f'{peer.name} started job "{title}" '
-                    f'with {len(inputs)} pieces.')
+                    f'with {len(inputs)} pieces'
+                    + (", double-checked." if verify else "."))
         room.announce_jobs()
         room.schedule()
-        if not any(p.worker and p.online for p in room.peers.values()):
+        helpers = sum(1 for p in room.peers.values() if p.worker and p.online)
+        note = None
+        if not helpers:
+            note = ("Nobody is helping yet. The job will start "
+                    "when someone turns on \"Help with jobs\".")
+        elif verify and helpers < 2:
+            note = ("Double-checking needs at least 2 helper computers. "
+                    "Each piece waits for a second computer to check it.")
+        if note:
             peer.send({"type": "chat", "system": True, "ts": now() * 1000,
-                       "text": "Nobody is helping yet. The job will start "
-                               "when someone turns on \"Help with jobs\"."})
+                       "text": note})
         return None
 
     if kind == "result":
@@ -635,34 +899,27 @@ def dispatch(room, peer, m):
         if not job or not 0 <= i < len(job.tasks):
             return None                      # job gone; ignore quietly
         t = job.tasks[i]
-        if t["worker"] != peer.id and peer.id not in t.get("tried", ()):
+        if peer.id not in t["tried"]:
             room.alert("Work together", "high", f'sent an answer for a piece '
                        f'of job "{job.title}" it was never given (ignored)',
                        peer, json.dumps(m.get("value"))[:200])
             return None
         if m.get("needCode"):
             job.code_sent.discard(peer.id)
-            room.requeue_task(job, i)
+            room.requeue_run(job, i, peer.id)
             room.schedule()
             return None
-        if job.state != "running" or t["state"] == "done":
-            if t["state"] == "running":      # job was cancelled: free the slot now
-                room.stop_task(job, i)
-                t["state"] = "pending"
-                room.announce_jobs()
-                room.schedule()
-            return None                      # late duplicate
-        room.stop_task(job, i)
-        t.update(state="done", worker=peer.id)
-        job.done += 1
+        if (job.state != "running" or t["state"] == "done"
+                or any(a[0] == peer.id for a in t["answers"])):
+            room.stop_run(job, i, peer.id)   # late copy: just free its slot
+            room.announce_jobs()
+            room.schedule()
+            return None
         peer.completed += 1
-        if m.get("ok"):
-            job.results[i] = m.get("value")
-        else:
-            job.results[i] = {"error": str(m.get("error", "failed"))[:1000]}
-            job.errors += 1
-        if job.done == len(job.tasks):
-            room.finish(job)
+        ok = bool(m.get("ok"))
+        value = (m.get("value") if ok
+                 else {"error": str(m.get("error", "failed"))[:1000]})
+        room.add_answer(job, i, peer, ok, value)
         room.announce_jobs()
         room.announce_peers()
         room.schedule()
@@ -676,14 +933,14 @@ def dispatch(room, peer, m):
                                          and peer.id == room.owner):
             return "Only the person who started a job can do that."
         if kind == "cancel" and job.state == "running":
-            job.state = "cancelled"
-            job.pending.clear()
+            room.cancel_job(job)
             room.system(f'{peer.name} cancelled job "{job.title}".')
         elif kind == "dismiss" and job.state != "running":
             for i in range(len(job.tasks)):  # free slots of pieces still out
-                room.stop_task(job, i)
+                room.stop_all_runs(job, i)
             del room.jobs[job.id]
         room.announce_jobs()
+        room.schedule()                      # freed helpers can take other work
         return None
 
     # ---- group owner actions ------------------------------------------
@@ -705,16 +962,29 @@ def dispatch(room, peer, m):
         return None
 
     if kind == "set_password":
-        password = str(m.get("password") or "")[:128]
-        if password:
-            room.pw_salt = secrets.token_bytes(16)
-            room.pw_hash = hash_pw(password, room.pw_salt)
-            room.system("The group owner changed the group password.")
-        else:
-            room.pw_salt = room.pw_hash = b""
-            room.system("The group owner removed the group password. "
-                        "Anyone with the group code can join.")
-        room.broadcast({"type": "locked", "locked": bool(room.pw_hash)})
+        # A new password value plus the group key locked with it; the group
+        # key itself doesn't change, so nobody already here loses access.
+        password = str(m.get("password") or "")
+        wrapped = str(m.get("wrapped") or "")
+        if not re.fullmatch(r"[0-9a-f]{64}", password) or not wrapped:
+            return ("The group needs a password: it's what encrypts your "
+                    "messages, notes and files.")
+        if len(wrapped) > 200:
+            return "Bad key."
+        room.pw_salt = secrets.token_bytes(16)
+        room.pw_hash = hash_pw(password, room.pw_salt)
+        room.e2e_wrapped = wrapped
+        room.system("The group owner changed the group password.")
+        room.broadcast({"type": "locked", "locked": True})
+        return None
+
+    if kind == "e2e_key":
+        # The group's creator sends its random key, locked with the password.
+        wrapped = str(m.get("wrapped") or "")
+        if room.e2e_wrapped or not wrapped or len(wrapped) > 200:
+            return None                       # already set: first one wins
+        room.e2e_wrapped = wrapped
+        room.broadcast({"type": "e2e", "wrapped": wrapped})
         return None
 
     if kind == "restore_notes":
@@ -744,18 +1014,18 @@ def reaper():
                 for p in list(room.peers.values()):
                     if not p.online and now() - p.offline_since > GRACE_SECONDS:
                         room.remove_peer(p)
-                stuck = False
-                for running in list(room.assigned.values()):
+                for pid, running in list(room.assigned.items()):
                     for jid, i in list(running):
                         j = room.jobs.get(jid)
-                        if j is None:
+                        started = j and j.tasks[i]["runs"].get(pid)
+                        if not started:
                             running.discard((jid, i))
-                        elif now() - j.tasks[i]["started"] > TASK_TIMEOUT:
-                            room.requeue_task(j, i)
-                            stuck = True
-                if stuck:
-                    room.schedule()
+                        elif now() - started > TASK_TIMEOUT:
+                            room.requeue_run(j, i, pid, abort=True)
+                # also hands out backup copies of pieces that are running slowly
+                room.schedule()
                 if not room.peers:
+                    claude_bridge.close(room)
                     del rooms[rname]
 
 
@@ -773,9 +1043,41 @@ def announcer():
 # ---- HTTP ------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
     server_version = "CREW/1.0"
+    sys_version = ""                          # don't advertise the Python version
+    plain = False                             # a plain-HTTP visitor being redirected
 
     def log_message(self, fmt, *args):
         pass                                  # keep the console quiet
+
+    def setup(self):
+        """With TLS on, encrypt the connection here (in this connection's own
+        thread, so a slow visitor can't hold up everyone else). Someone who
+        typed http:// is sent to the https:// address instead."""
+        ctx = getattr(self.server, "tls", None)
+        if ctx:
+            raw = self.request
+            raw.settimeout(15)
+            try:
+                first = raw.recv(1, socket.MSG_PEEK)
+                if first and first != b"\x16":        # not a TLS handshake
+                    self.plain = True
+                    redirect_to_https(raw)
+                else:
+                    self.request = ctx.wrap_socket(raw, server_side=True)
+            except (OSError, ValueError):
+                self.plain = True
+            self.request.settimeout(None)
+        super().setup()
+
+    def handle(self):
+        if not self.plain:
+            super().handle()
+
+    def end_headers(self):
+        if not urlparse(self.path).path.startswith("/api/browse"):
+            for k, v in SECURITY_HEADERS.items():
+                self.send_header(k, v)
+        super().end_headers()
 
     def reply(self, code, obj):
         data = json.dumps(obj).encode()
@@ -813,6 +1115,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(data)
+        elif u.path == "/api/browse":
+            self.browse_page(parse_qs(u.query))
+        elif u.path.startswith("/vendor/pyodide/"):
+            terminal_support.serve_vendor(self, u.path)
+        elif u.path == "/api/stdin":
+            terminal_support.get(self, parse_qs(u.query))
         elif u.path == "/api/events":
             self.events(parse_qs(u.query))
         elif u.path == "/api/file":
@@ -837,6 +1145,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/join":
             return self.join(body)
+        if path == "/api/claude/permission":  # from Claude Code's approval helper
+            return self.reply(*claude_bridge.permission(
+                body, self.client_address[0]))
 
         with lock:
             room, peer = self.auth(body.get("room"), body.get("id"),
@@ -846,6 +1157,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/leave":
                 room.remove_peer(peer)
                 err, code = None, 200
+            elif path == "/api/stdin":        # a line typed into a running program
+                err, code = terminal_support.post(peer, body)
             elif path == "/api/send":
                 msg = body.get("msg")
                 err = dispatch(room, peer, msg if isinstance(msg, dict) else {})
@@ -853,6 +1166,29 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 err, code = "Not found", 404
         self.reply(code, {"error": err} if err else {"ok": True})
+
+    # ---- built-in browser --------------------------------------------
+    def browse_page(self, qs):
+        """GET /api/browse?room&id&key&url: a web page for the Browse tab."""
+        g = lambda k: (qs.get(k) or [""])[0]
+        with lock:
+            room = rooms.get(clean_room(g("room")))
+            peer = room.peers.get(g("id")) if room else None
+            ok = browse.allowed(peer, g("key"))
+            limited = ok and room.rate((peer.id, "browse"), *browse.RATE)
+        # The fetch can take seconds, so it happens without holding the lock.
+        status, ctype, body = browse.page(
+            g("url"), self.headers.get("Accept-Language", ""), ok, limited)
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        for k, v in browse.SAFE_HEADERS.items():
+            self.send_header(k, v)
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except OSError:
+            pass
 
     # ---- shared files ------------------------------------------------
     def upload(self, qs):
@@ -898,8 +1234,11 @@ class Handler(BaseHTTPRequestHandler):
             err, target = room.check_upload(n, g("to"))
             if err:
                 return self.reply(409, {"error": err})
-            f = room.add_file(peer, clean_filename(g("name")),
-                              b"".join(chunks), target)
+            meta = g("meta")
+            meta = meta if meta.startswith(E2E_PREFIX) and len(meta) <= 2000 else ""
+            f = room.add_file(peer, "🔒 encrypted file" if meta
+                              else clean_filename(g("name")),
+                              b"".join(chunks), target, meta)
         self.reply(200, {"ok": True, "id": f.id})
 
     def download(self, qs):
@@ -936,15 +1275,21 @@ class Handler(BaseHTTPRequestHandler):
         if not rname:
             return self.reply(400, {"error": "Group code can use letters, "
                                              "numbers, - and _."})
-        password = str(body.get("password") or "")[:128]
-        wrong = False
+        # The browser never sends the password itself, only a value derived
+        # from it (see e2e.js), so this server can't learn the key that
+        # encrypts the group's chat, notes and files.
+        password = str(body.get("password") or "")
+        if not re.fullmatch(r"[0-9a-f]{64}", password):
+            return self.reply(400, {"error": "Please reload the page: CREW "
+                                             "was updated."})
+        wrong = created = False
         with lock:
             room = rooms.get(rname)
             if room is None:                  # first person sets the password
                 room = rooms[rname] = Room(rname)
-                if password:
-                    room.pw_salt = secrets.token_bytes(16)
-                    room.pw_hash = hash_pw(password, room.pw_salt)
+                room.pw_salt = secrets.token_bytes(16)
+                room.pw_hash = hash_pw(password, room.pw_salt)
+                created = True
             elif room.pw_hash:
                 wrong = not hmac.compare_digest(
                     room.pw_hash, hash_pw(password, room.pw_salt))
@@ -984,7 +1329,8 @@ class Handler(BaseHTTPRequestHandler):
             if room.owner not in room.peers:  # first in = group owner
                 room.set_owner(peer)
             out = {"room": rname, "id": peer.id, "token": peer.token,
-                   "name": name, "locked": bool(room.pw_hash)}
+                   "name": name, "locked": bool(room.pw_hash),
+                   "created": created, "wrapped": room.e2e_wrapped}
         self.reply(200, out)
 
     def events(self, qs):
@@ -1001,18 +1347,28 @@ class Handler(BaseHTTPRequestHandler):
             old, q = peer.q, queue.Queue()
             q.put(encode({"type": "welcome", "you": peer.info(),
                           "room": room.name, "locked": bool(room.pw_hash),
+                          "e2e": room.e2e_wrapped,
                           "max": MAX_PEERS, "peers": room.peer_list(),
                           "notes": room.notes, "notesBy": room.notes_by,
                           "jobs": room.job_list(), "owner": room.owner,
                           "alerts": list(room.alerts)
-                          if peer.id == room.owner else []}))
+                          if peer.id == room.owner else [],
+                          "browseKey": browse.key_for(peer)}))
             q.put(encode(room.files_msg(peer.id)))
+            q.put(encode(claude_bridge.state_msg(room, peer)))
+            q.put(encode(claude_bridge.state_msg(room, peer, "codechat")))
+            q.put(encode(codeshare.state_msg(room, peer)))
             while True:                       # carry over undelivered messages
                 try:
                     m = old.get_nowait()
                 except queue.Empty:
                     break
-                if m is not None and m[0] not in ("peers", "jobs", "files"):
+                # Lists, the shared editor and the Claude conversations were
+                # just re-sent in full above; an older copy of them must not
+                # overwrite the fresh one (or show the same step twice).
+                if m is not None and m[0] not in ("peers", "jobs", "files",
+                                                  "code", "snippets",
+                                                  "claude", "codechat"):
                     q.put(m)
             peer.q = q
             old.put(None)                     # end any previous stream
@@ -1049,6 +1405,76 @@ class Handler(BaseHTTPRequestHandler):
                     room.schedule()
 
 
+def redirect_to_https(sock):
+    """Answer a plain-HTTP request with a redirect to the same page on https."""
+    data = b""
+    while b"\r\n\r\n" not in data and len(data) < 16384:
+        chunk = sock.recv(4096)
+        if not chunk:
+            return
+        data += chunk
+    lines = data.split(b"\r\n")
+    parts = lines[0].split(b" ")
+    path = parts[1].decode("latin-1") if len(parts) > 1 else "/"
+    host = next((l.split(b":", 1)[1].strip().decode("latin-1")
+                 for l in lines[1:] if l.lower().startswith(b"host:")),
+                f"localhost:{PORT}")
+    if not re.fullmatch(r"[A-Za-z0-9.\-\[\]:]{1,255}", host) or not path.startswith("/"):
+        host, path = f"localhost:{PORT}", "/"
+    sock.sendall(f"HTTP/1.1 301 Moved Permanently\r\n"
+                 f"Location: https://{host}{path}\r\n"
+                 f"Content-Length: 0\r\nConnection: close\r\n\r\n".encode())
+
+
+class QuietServer(ThreadingHTTPServer):
+    daemon_threads = True
+    tls = None
+
+    def handle_error(self, request, client_address):
+        err = sys.exc_info()[1]
+        if isinstance(err, (OSError, ssl.SSLError)):
+            return                            # visitors hanging up, bad handshakes
+        super().handle_error(request, client_address)
+
+
+def tls_files():
+    """Our own certificate, made once with openssl and kept in ~/.config/crew.
+    It's remade if this computer's network address changes."""
+    home = os.path.join(os.environ.get("XDG_CONFIG_HOME")
+                        or os.path.expanduser("~/.config"), "crew")
+    cert, key, ipfile = (os.path.join(home, n) for n in
+                         ("crew-cert.pem", "crew-key.pem", "crew-cert-ip"))
+    ip = lan_ip()
+    try:
+        with open(ipfile) as f:
+            same = f.read().strip() == ip
+    except OSError:
+        same = False
+    if same and os.path.exists(cert) and os.path.exists(key):
+        return cert, key, False
+    os.makedirs(home, mode=0o700, exist_ok=True)
+    san = "DNS:localhost,IP:127.0.0.1" + (f",IP:{ip}" if ip != "127.0.0.1" else "")
+    old = os.umask(0o077)                     # the private key is readable only by you
+    try:
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "ec",
+                        "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+                        "-keyout", key, "-out", cert, "-days", "825",
+                        "-subj", "/CN=CREW", "-addext", f"subjectAltName={san}"],
+                       check=True, capture_output=True)
+    finally:
+        os.umask(old)
+    with open(ipfile, "w") as f:
+        f.write(ip)
+    return cert, key, True
+
+
+def fingerprint(cert):
+    with open(cert) as f:
+        der = ssl.PEM_cert_to_DER_cert(f.read())
+    h = hashlib.sha256(der).hexdigest().upper()
+    return ":".join(h[i:i + 2] for i in range(0, len(h), 2))
+
+
 def lan_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -1061,13 +1487,50 @@ def lan_ip():
 
 
 def main():
-    srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    srv.daemon_threads = True
+    srv = QuietServer(("0.0.0.0", PORT), Handler)
+    scheme, print_fp = "http", None
+    if OPTS["tls"]:
+        if OPTS["cert"]:
+            cert, key, made = OPTS["cert"], OPTS["key"], False
+            SECURITY_HEADERS["Strict-Transport-Security"] = "max-age=31536000"
+        else:
+            try:
+                cert, key, made = tls_files()
+            except (OSError, subprocess.CalledProcessError) as e:
+                sys.exit(f"Couldn't make an HTTPS certificate with openssl ({e}).\n"
+                         "Install openssl, pass --cert/--key, or (not private) "
+                         "use --no-tls.")
+            print_fp = made
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.load_cert_chain(cert, key)
+        srv.tls, scheme = ctx, "https"
+        claude_bridge.config["tls_fp"] = fingerprint(cert)
     threading.Thread(target=reaper, daemon=True).start()
     threading.Thread(target=announcer, daemon=True).start()
     print(f"CREW is running (up to {MAX_PEERS} computers per group).")
-    print(f"  On this computer:    http://localhost:{PORT}")
-    print(f"  On other computers:  http://{lan_ip()}:{PORT}")
+    print(f"  On this computer:    {scheme}://localhost:{PORT}")
+    print(f"  On other computers:  {scheme}://{lan_ip()}:{PORT}")
+    if OPTS["tls"]:
+        print("  Connections are encrypted (HTTPS).")
+        if print_fp is not None:
+            print("  Browsers will warn that the certificate isn't trusted, because\n"
+                  "  CREW made it itself. Check that the browser's certificate\n"
+                  "  details show this SHA-256 fingerprint, then continue:\n"
+                  f"    {fingerprint(cert)}"
+                  + ("\n  (New certificate made just now.)" if print_fp else ""))
+    else:
+        print("  WARNING: --no-tls is on. Anyone on the network can read the\n"
+              "  traffic, and end-to-end encryption only works on this computer.")
+    if CLAUDE_DIR is not None:
+        claude_bridge.config["scheme"] = scheme
+        print(claude_bridge.setup(CLAUDE_DIR, PORT, lock,
+                                  lambda name: rooms.get(name)))
+    if terminal_support.python_available():
+        print("  Terminal tab: Python is ready (runs offline in each browser).")
+    else:
+        print("  Terminal tab: Python isn't installed yet. For Python in the\n"
+              "  terminal, run once:  python3 setup_python.py   (no restart needed)")
     print("Press Ctrl+C to stop.")
     try:
         srv.serve_forever()

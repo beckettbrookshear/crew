@@ -81,7 +81,12 @@
   .msg.sys { background: none; align-self: center; color: var(--muted); font-size: 13px; padding: 2px; }
   .composer { display: flex; gap: 8px; margin-top: 8px; }
   .composer select { width: 150px; flex: none; }
-  .composer input { flex: 1; }
+  .composer input, .composer textarea { flex: 1; }
+  .composer textarea { resize: none; max-height: 9em; overflow-y: auto; line-height: 1.4; }
+  .codeblock { margin: 6px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); white-space: normal; overflow: hidden; }
+  .codeblock .cbhead { display: flex; gap: 6px; align-items: center; padding: 3px 6px 3px 10px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+  .codeblock .cbhead span { flex: 1; }
+  .codeblock pre { margin: 0; padding: 8px 10px; overflow-x: auto; white-space: pre; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text); }
 
   /* notes */
   #notes { height: 55vh; min-height: 260px; }
@@ -140,6 +145,7 @@
 </style>
 <link rel="stylesheet" href="prefs.css">
 <script src="prefs.js"></script>
+<script src="e2e.js"></script>
 </head>
 <body>
 
@@ -147,14 +153,14 @@
 <section id="join">
   <form class="card" id="joinForm">
     <h1>CREW</h1>
-    <div class="muted">Collaborative Resource Exchange Web<br>Link up to 12 computers in one group.</div>
+    <div class="muted">Write, run and share code together.<br>Up to 12 people in one group. No accounts, nothing to install.</div>
     <label for="jName">Your name</label>
     <input id="jName" maxlength="24" autocomplete="nickname" required>
     <label for="jRoom">Group code (everyone uses the same one)</label>
     <input id="jRoom" maxlength="32" placeholder="e.g. lab-team" required>
     <label for="jPass">Group password</label>
-    <input id="jPass" type="password" maxlength="128" autocomplete="off" placeholder="Leave blank for an open group">
-    <div class="muted" style="font-size:13px;margin-top:4px">If you're starting a new group, the password you type here becomes its password.</div>
+    <input id="jPass" type="password" maxlength="128" minlength="8" autocomplete="off" required placeholder="At least 8 characters">
+    <div class="muted" style="font-size:13px;margin-top:4px">If you're starting a new group, the password you type here becomes its password. It also encrypts the group's chat, notes and files, so even the host computer can't read them. A long passphrase (several words) is best.</div>
     <button class="primary" type="submit" id="joinBtn">Join group</button>
     <div class="error" id="joinErr"></div>
   </form>
@@ -181,12 +187,21 @@
 
     <main>
       <nav class="tabs">
-        <button data-tab="chat" class="on">Chat <span class="count hidden" id="unread"></span></button>
+        <button data-tab="code" class="on">Code <span class="count hidden" id="codeCount"></span></button>
+        <button data-tab="terminal" title="A practice terminal that runs Python and JavaScript with no internet">Terminal</button>
+        <button data-tab="chat">Chat <span class="count hidden" id="unread"></span></button>
+        <button data-tab="mail">Mail <span class="count hidden" id="mailCount"></span></button>
         <button data-tab="files">Files <span class="count hidden" id="newFiles"></span></button>
         <button data-tab="notes">Shared notes</button>
-        <button data-tab="compute">Work together</button>
+        <button data-tab="browse">Browse</button>
+        <button data-tab="compute" title="Advanced: split a big calculation across everyone's computers">Work together</button>
+        <button data-tab="claude" id="claudeTab" class="hidden" title="Code with Claude, using your own Claude account">Claude Code <span class="count hidden" id="claudeCount"></span></button>
         <button data-tab="alerts" id="alertsTab" class="hidden" title="Only you see this, because you own the group">Alerts <span class="count hidden" id="alertCount"></span></button>
       </nav>
+
+      <div class="pane hidden" id="tab-mail"></div>  <!-- filled by mail.js -->
+      <div class="pane hidden" id="tab-browse"></div>  <!-- filled by browse.js -->
+      <div class="pane hidden" id="tab-claude"></div>  <!-- filled by claude.js -->
 
       <div class="pane hidden" id="tab-alerts">
         <div class="box">
@@ -199,7 +214,7 @@
         </div>
         <div class="box">
           <h3>Group password</h3>
-          <div class="muted" style="font-size:13px">After removing someone who knows the password, change it so they can't come back from another browser. Leave it blank to make the group open.</div>
+          <div class="muted" style="font-size:13px">After removing someone who knows the password, change it so they can't come back from another browser. Everyone already here keeps reading the group; only new joiners need the new password. (The group can't be made open: the password is what encrypts it.)</div>
           <form class="row" id="pwForm" style="margin-top:8px">
             <input type="password" id="newPw" maxlength="128" autocomplete="new-password" placeholder="New group password" style="flex:1;width:auto;min-width:160px">
             <button class="primary" type="submit">Change password</button>
@@ -208,11 +223,14 @@
         </div>
       </div>
 
-      <div class="pane" id="tab-chat">
+      <div class="pane" id="tab-code"></div>  <!-- filled by code.js -->
+      <div class="pane hidden" id="tab-terminal"></div>  <!-- filled by terminal.js -->
+
+      <div class="pane hidden" id="tab-chat">
         <div id="messages"></div>
         <form class="composer" id="chatForm">
           <select id="chatTo" title="Send to"></select>
-          <input id="chatText" placeholder="Type a message…" autocomplete="off">
+          <textarea id="chatText" rows="1" placeholder="Type a message… (Shift+Enter for a new line; wrap code in ``` )" autocomplete="off"></textarea>
           <button class="primary" type="submit">Send</button>
         </form>
       </div>
@@ -294,6 +312,9 @@
           <textarea id="jobInputs" class="mono" rows="3" spellcheck="false"></textarea>
           <label for="jobCombine">combine(results, inputs): runs on your computer at the end (optional)</label>
           <textarea id="jobCombine" class="mono" rows="5" spellcheck="false"></textarea>
+          <label class="switch" style="margin-top:12px"><input type="checkbox" id="jobVerify"> Double-check every piece on two different computers</label>
+          <div class="muted" style="font-size:13px;margin-top:4px">Catches a computer that gives a wrong answer. It takes about twice the work, and only suits jobs that give the same answer every time (not random ones like the π example).
+            Faster computers get pieces first, and a piece that's running slowly is also given to a free computer. Whichever finishes first is used.</div>
           <div class="row" style="margin-top:12px">
             <button class="primary" type="submit">Start job</button>
             <span class="error" id="jobErr" style="margin:0"></span>
@@ -326,7 +347,7 @@ let peers = [];
 let jobs = [];
 const jobCode = {};      // job id -> work() code, cached on helpers
 const finished = {};     // job id -> {results, combined, ...} (my own jobs)
-let running = 0, doneHere = 0, unread = 0, tab = "chat";
+let running = 0, doneHere = 0, unread = 0, tab = "code";
 let rejoining = false;
 
 // ---------------- network ----------------
@@ -351,14 +372,22 @@ const deviceId = (() => {
   return d;
 })();
 
-async function join(name, room, password) {
-  const r = await api("/api/join", { name, room, password, device: deviceId });
+// The password never goes to the server: e2e.js turns it into a login value
+// for the server and a separate key that only the browsers know.
+// `saved` is what this tab remembered, for reconnecting without the password.
+async function join(name, room, password, saved) {
+  if (!saved && String(password || "").length < 8)
+    throw new Error("Use a group password of at least 8 characters. It's what encrypts the group's messages.");
+  const k = saved ? await crewE2E.fromMaterial(saved) : await crewE2E.derive(password, room);
+  const r = await api("/api/join", { name, room, password: k.auth, device: deviceId });
   // Job ids restart in each group, so drop code and sandboxes from before.
   for (const k in jobCode) delete jobCode[k];
   closePools();
   S = { room: r.room, id: r.id, token: r.token, name: r.name };
   store.set("session", S, true);
-  store.set("pw", password || "", true);   // this tab only, for auto-rejoin
+  store.set("pw", k.material, true);       // this tab only, for auto-rejoin (not the password)
+  const wrapped = await crewE2E.start(k, r.wrapped, r.created);
+  if (wrapped) await send({ type: "e2e_key", wrapped });   // we made the group's key
   store.set("last", { name, room: r.room });
   history.replaceState(null, "", "#" + encodeURIComponent(r.room));
   connect();
@@ -386,7 +415,7 @@ async function rejoin() {
   rejoining = true;
   es && es.close();
   const { name, room } = store.get("last") || {};
-  try { await join(name, room, store.get("pw") || ""); }   // join() saves the new session
+  try { await join(name, room, "", store.get("pw") || ""); }   // join() saves the new session
   catch (e) { showJoin(e.message); }
   finally { rejoining = false; }
 }
@@ -409,31 +438,37 @@ function handle(m) {
       setPeers(m.peers, m.max);
       setAlerts(m.alerts || []);
       ownerNote();
-      setNotes(m.notes, m.notesBy);
+      if (!crewE2E.on && m.e2e && store.get("pw"))   // page reload: unlock the key again
+        crewE2E.fromMaterial(store.get("pw")).then(k => crewE2E.start(k, m.e2e, false))
+          .catch(x => addChat({ system: true, text: "🔒 " + x.message + " Leave and join again with the password." }));
+      showNotes(m.notes, m.notesBy);
       setJobs(m.jobs);
       sendHelperState();
       sendSpecs();
       break;
     case "peers": setPeers(m.peers); break;
     case "files": setFiles(m); break;
-    case "chat": addChat(m); break;
-    case "notes": setNotes(m.text, m.byName); break;
+    case "chat": showChat(m); break;
+    case "notes": showNotes(m.text, m.byName); break;
+    case "e2e": crewE2E.unlock(m.wrapped).catch(x => addChat({ system: true, text: "🔒 " + x.message })); break;
     case "jobs": setJobs(m.jobs); break;
     case "task": runTask(m); break;
+    case "abort": active[m.job + ":" + m.task]?.(); break;
     case "job_done": jobDone(m); break;
     case "alert": addAlert(m.alert); break;
     case "alerts": setAlerts(m.alerts); break;
     case "locked": setLock(m.locked); break;
     case "kicked":
-      es && es.close(); S = null; store.del("session"); store.del("pw");
+      es && es.close(); S = null; store.del("session"); store.del("pw"); store.del("claudeCred"); crewE2E.clear();
       showJoin("The group owner removed you from this group.");
       break;
   }
 }
 
 function setLock(locked) {
-  $("#lockPill").textContent = locked ? "🔒 Password protected" : "🔓 Open group";
-  $("#lockPill").title = locked ? "People need the group password to join." : "Anyone with the group code can join.";
+  $("#lockPill").textContent = locked ? "🔒 End-to-end encrypted" : "🔓 Open group";
+  $("#lockPill").title = locked ? "Chat, shared notes and files are encrypted in each browser with a key from the group password. " +
+    "The host computer only passes along scrambled data. People need the password to join." : "Anyone with the group code can join.";
 }
 
 // ---------------- group owner & alerts ----------------
@@ -523,12 +558,14 @@ $("#clearAlerts").addEventListener("click", () => {
 $("#pwForm").addEventListener("submit", async e => {
   e.preventDefault();
   const pw = $("#newPw").value;
-  if (!pw && !confirm("Remove the password? Anyone with the group code will be able to join.")) return;
+  if (pw.length < 8) { $("#pwMsg").textContent = "Use at least 8 characters. The group can't be open: the password is what encrypts it."; return; }
   try {
-    await send({ type: "set_password", password: pw });
-    store.set("pw", pw, true);            // so this tab can still reconnect
+    // Same group key, locked with the new password, so nobody here loses access.
+    const k = await crewE2E.derive(pw, S.room);
+    await send({ type: "set_password", password: k.auth, wrapped: await crewE2E.lock(k.wrap) });
+    store.set("pw", k.material, true);    // so this tab can still reconnect
     $("#newPw").value = "";
-    $("#pwMsg").textContent = pw ? "Password changed. Tell the people you trust." : "Password removed.";
+    $("#pwMsg").textContent = "Password changed. Tell the people you trust.";
   } catch (x) { $("#pwMsg").textContent = x.message; }
 });
 
@@ -577,11 +614,41 @@ function addChat(m) {
     let who = mine ? "You" : m.fromName;
     if (m.to) who += mine ? ` → ${m.toName} (private)` : " (private, to you)";
     node = el("div", { className: "msg" + (mine ? " me" : "") + (m.to ? " dm" : "") },
-      el("span", { className: "who" }, el("span", { className: "nm", textContent: who }), time), m.text);
+      el("span", { className: "who" }, el("span", { className: "nm", textContent: who }), time), ...chatBody(m.text));
   }
   box.append(node);
   if (atBottom || m.from === S.id) box.scrollTop = box.scrollHeight;
   if (tab !== "chat" && !m.system) { unread++; showUnread(); }
+}
+// Message text -> nodes. Text between ``` fences becomes a code block with buttons.
+function chatBody(text) {
+  const parts = String(text).split(/```([\w+#-]*)[ \t]*\n?([\s\S]*?)```/g);
+  const out = [];
+  for (let i = 0; i < parts.length; i += 3) {
+    if (parts[i]) out.push(parts[i]);
+    if (i + 1 >= parts.length) break;
+    const lang = parts[i + 1], code = parts[i + 2].replace(/\n$/, "");
+    const copy = el("button", { type: "button", className: "small", textContent: "Copy" });
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(code); copy.textContent = "Copied!"; }
+      catch { copy.textContent = "Select and copy by hand"; }
+      setTimeout(() => copy.textContent = "Copy", 1500);
+    };
+    out.push(el("div", { className: "codeblock" },
+      el("div", { className: "cbhead" }, el("span", { textContent: lang || "code" }), copy,
+        el("button", { type: "button", className: "small", textContent: "Open in editor", onclick: () => window.crewCode?.open(code, lang) })),
+      el("pre", { textContent: code })));
+  }
+  return out;
+}
+{ // The chat box grows for multi-line code; Enter sends, Shift+Enter adds a line.
+  const box = $("#chatText");
+  const fit = () => { box.style.height = "auto"; box.style.height = Math.min(box.scrollHeight + 2, 150) + "px"; };
+  box.addEventListener("input", fit);
+  box.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#chatForm").requestSubmit(); }
+  });
+  $("#chatForm").addEventListener("submit", () => setTimeout(fit, 0));
 }
 function showUnread() {
   const u = $("#unread");
@@ -591,10 +658,22 @@ $("#chatForm").addEventListener("submit", async e => {
   e.preventDefault();
   const input = $("#chatText"), text = input.value.trim();
   if (!text) return;
+  if (text.length > 4000) { addChat({ system: true, text: "Not sent: messages can be up to 4,000 characters." }); return; }
   input.value = "";
-  try { await send({ type: "chat", text, to: $("#chatTo").value || undefined }); }
+  try { await send({ type: "chat", text: await crewE2E.encryptText(text, "chat"), to: $("#chatTo").value || undefined }); }
   catch (err) { addChat({ system: true, text: "Not sent: " + err.message }); input.value = text; }
 });
+// Incoming chat is decrypted in arrival order before it's shown.
+let chatQueue = Promise.resolve();
+function showChat(m) {
+  chatQueue = chatQueue.then(async () => {
+    if (crewE2E.isSealed(m.text)) {
+      try { m = { ...m, text: await crewE2E.decryptText(m.text, "chat") }; }
+      catch { m = { ...m, text: "🔒 (This message couldn't be unlocked.)" }; }
+    }
+    addChat(m);
+  });
+}
 
 // ---------------- shared notes ----------------
 let notesTimer = null;
@@ -609,11 +688,20 @@ function setNotes(text, by) {
 }
 $("#notes").addEventListener("input", () => {
   clearTimeout(notesTimer);
-  notesTimer = setTimeout(() => {
-    send({ type: "notes", text: $("#notes").value }).catch(() => {});
+  notesTimer = setTimeout(async () => {
+    try { await send({ type: "notes", text: await crewE2E.encryptText($("#notes").value, "notes") }); }
+    catch (x) { $("#notesBy").textContent = "Not saved: " + x.message; return; }
     $("#notesBy").textContent = "Last edit by you.";
   }, 300);
 });
+// Notes arrive encrypted; only the newest version is shown.
+let notesSeq = 0;
+async function showNotes(text, by) {
+  const mine = ++notesSeq;
+  try { text = await crewE2E.decryptText(text || "", "notes"); }
+  catch { if (mine === notesSeq) $("#notesBy").textContent = "🔒 The notes couldn't be unlocked."; return; }
+  if (mine === notesSeq) setNotes(text, by);
+}
 
 // ---------------- shared files ----------------
 let files = [], seenFiles = null, newFiles = 0, fileMax = 25e6;
@@ -624,7 +712,22 @@ function showNewFiles() {
   const u = $("#newFiles");
   u.textContent = newFiles; u.classList.toggle("hidden", !newFiles);
 }
+// Real file names travel encrypted (f.meta); unlock each once, then redraw.
+const fileNames = {};
+const fileName = f => f.meta ? (fileNames[f.id] ?? "🔒 unlocking…") : f.name;
+const fileSize = f => f.meta ? Math.max(0, f.size - crewE2E.OVERHEAD) : f.size;
+let lastFilesMsg = null;
+function unlockFileNames(list) {
+  const todo = list.filter(f => f.meta && !(f.id in fileNames));
+  if (!todo.length) return;
+  Promise.all(todo.map(async f => {
+    try { fileNames[f.id] = await crewE2E.decryptText(f.meta, "file-name"); }
+    catch { fileNames[f.id] = "🔒 (name couldn't be unlocked)"; }
+  })).then(() => { if (lastFilesMsg) setFiles(lastFilesMsg); });
+}
 function setFiles(m) {
+  lastFilesMsg = m;
+  unlockFileNames(m.files);
   files = m.files; fileMax = m.max;
   $("#fileMax").textContent = fmtSize(m.max);
   $("#fileUsage").textContent = `Group storage: ${fmtSize(m.used)} of ${fmtSize(m.quota)} used`;
@@ -637,17 +740,17 @@ function setFiles(m) {
   box.className = "";
   box.replaceChildren(...files.slice().sort((a, b) => b.ts - a.ts).map(f => {
     const mine = f.owner === S.id;
-    let line = `${fmtSize(f.size)} · from ${mine ? "you" : f.ownerName + (f.ownerHere ? "" : " (left)")}`;
+    let line = `${fmtSize(fileSize(f))} · from ${mine ? "you" : f.ownerName + (f.ownerHere ? "" : " (left)")}`;
     if (f.to) line += mine ? ` → ${f.toName} (private)` : " (private, to you)";
     line += " · " + new Date(f.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const actions = el("div", { className: "row" },
       el("button", { className: "small primary", textContent: "Download", onclick: e => downloadFile(f, e.target) }));
     if (mine || !f.ownerHere) actions.append(el("button", { className: "small", textContent: "Delete", onclick: async () => {
-      if (!confirm(`Delete "${f.name}"${f.to ? "" : " for everyone"}?`)) return;
+      if (!confirm(`Delete "${fileName(f)}"${f.to ? "" : " for everyone"}?`)) return;
       try { await send({ type: "delete_file", file: f.id }); } catch (x) { alert(x.message); }
     } }));
     return el("div", { className: "file" },
-      el("div", { className: "info" }, el("b", { textContent: f.name }),
+      el("div", { className: "info" }, el("b", { textContent: fileName(f) }),
         el("div", { className: "muted", style: "font-size:13px", textContent: line })),
       actions);
   }));
@@ -659,7 +762,14 @@ async function downloadFile(f, btn) {
   try {
     const r = await fetch("/api/file?" + q);
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
-    const a = el("a", { href: URL.createObjectURL(await r.blob()), download: f.name });
+    let blob = await r.blob(), name = f.name;
+    if (f.meta) {                               // encrypted: unlock it here, in the browser
+      btn.textContent = "Unlocking…";
+      try { blob = new Blob([await crewE2E.decryptBytes(await blob.arrayBuffer(), "file")]); }
+      catch { throw new Error("the file couldn't be unlocked."); }
+      name = await crewE2E.decryptText(f.meta, "file-name").catch(() => "file");
+    }
+    const a = el("a", { href: URL.createObjectURL(blob), download: name });
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   } catch (x) { alert("Couldn't download: " + x.message); }
@@ -670,7 +780,7 @@ function uploadFiles(list) {
   const to = $("#fileTo").value;
   for (const file of list) uploadFile(file, to);
 }
-function uploadFile(file, to) {
+async function uploadFile(file, to) {
   const bar = el("div", { style: "width:0%" });
   const status = el("span", { className: "muted", textContent: " · starting…" });
   const row = el("div", { className: "upload" }, el("b", { textContent: file.name }), status, el("div", { className: "bar" }, bar));
@@ -679,8 +789,15 @@ function uploadFile(file, to) {
     status.textContent = " · not sent: " + msg; status.className = "error"; status.style.margin = "0";
     bar.parentNode.remove(); setTimeout(() => row.remove(), 10000);
   };
-  if (file.size > fileMax) return fail(`too big (max ${fmtSize(fileMax)})`);
-  const q = new URLSearchParams({ room: S.room, id: S.id, token: S.token, name: file.name, to });
+  if (file.size + crewE2E.OVERHEAD > fileMax) return fail(`too big (max ${fmtSize(fileMax - crewE2E.OVERHEAD)})`);
+  // Encrypted here, so the host only ever holds scrambled bytes and no file name.
+  let body, meta;
+  try {
+    status.textContent = " · encrypting…";
+    body = await crewE2E.encryptBytes(await file.arrayBuffer(), "file");
+    meta = await crewE2E.encryptText(file.name, "file-name");
+  } catch (x) { return fail(x.message); }
+  const q = new URLSearchParams({ room: S.room, id: S.id, token: S.token, name: "file", meta, to });
   const xhr = new XMLHttpRequest();            // XHR (not fetch) for upload progress
   xhr.open("POST", "/api/upload?" + q);
   xhr.upload.onprogress = e => {
@@ -695,7 +812,7 @@ function uploadFile(file, to) {
     if (xhr.status === 401) rejoin();
   };
   xhr.onerror = () => fail("connection problem");
-  xhr.send(file);
+  xhr.send(body);
 }
 
 $("#fileInput").addEventListener("change", e => { uploadFiles(e.target.files); e.target.value = ""; });
@@ -777,18 +894,27 @@ function closePools(keep = () => false) {
   }
 }
 
+// Pieces running here, so the server can stop one ("abort") when another
+// computer already answered it, the job was cancelled, or it got stuck.
+const active = {};       // "job:task" -> stop()
 async function runTask(m) {
   if (m.code) jobCode[m.job] = m.code;
   const code = jobCode[m.job];
   if (!code) return send({ type: "result", job: m.job, task: m.task, needCode: true }).catch(() => {});
+  const key = m.job + ":" + m.task;
   running++; updateHere();
   const pool = pools[m.job] ||= { url: sandboxURL(code, "work"), idle: [] };
-  let w = pool.idle.pop(), r;
-  try { w ||= new Worker(pool.url); r = await callWorker(w, [m.input], 60000); }
+  let w = pool.idle.pop(), r, stopped = false, stop;
+  const abort = new Promise(res => stop = () => { stopped = true; res({ ok: false, alive: false }); });
+  active[key] = stop;
+  try { w ||= new Worker(pool.url); r = await Promise.race([callWorker(w, [m.input], 60000), abort]); }
   catch (e) { r = { ok: false, error: String(e), alive: false }; }
+  if (active[key] === stop) delete active[key];
   if (r.alive && pools[m.job] === pool) pool.idle.push(w);   // keep it for the next piece
   else if (w) w.terminate();
-  running--; doneHere++; updateHere();
+  running--; updateHere();
+  if (stopped) return;                   // not needed any more: don't report
+  doneHere++; updateHere();
   send({ type: "result", job: m.job, task: m.task, ok: r.ok, value: r.value, error: r.error }).catch(() => {});
 }
 function updateHere() {
@@ -915,7 +1041,10 @@ function setJobs(list) {
         el("span", { className: "muted", textContent: `by ${mine ? "you" : j.ownerName} · ${stateText}` })),
       el("div", { className: "bar" }, el("div", { style: `width:${pct}%` })),
       el("div", { className: "muted", textContent:
-        `${j.done} of ${j.total} pieces done (${pct}%)` + (j.running ? ` · ${j.running} running` : "") + (j.errors ? ` · ${j.errors} errors` : "") }));
+        `${j.done} of ${j.total} pieces done (${pct}%)` + (j.running ? ` · ${j.running} running` : "") + (j.errors ? ` · ${j.errors} errors` : "")
+        + (j.verify ? " · double-checked" : "")
+        + (j.disagreed ? ` · computers disagreed on ${j.disagreed}` : "")
+        + (j.backups ? ` · ${j.backups} slow ${j.backups === 1 ? "piece" : "pieces"} also given to a free computer` : "") }));
     if (mine) {
       const actions = el("div", { className: "row", style: "margin-top:6px" });
       if (j.state === "running") actions.append(el("button", { className: "small", textContent: "Cancel", onclick: () => send({ type: "cancel", job: j.id }) }));
@@ -1020,7 +1149,7 @@ $("#jobForm").addEventListener("submit", async e => {
   try { inputs = JSON.parse($("#jobInputs").value); } catch { err.textContent = "Inputs are not valid JSON."; return; }
   if (!Array.isArray(inputs) || !inputs.length) { err.textContent = "Inputs must be a non-empty JSON list, like [1, 2, 3]."; return; }
   try {
-    await send({ type: "job", title: $("#jobTitle").value, code: $("#jobCode").value, inputs, combine: $("#jobCombine").value });
+    await send({ type: "job", title: $("#jobTitle").value, code: $("#jobCode").value, inputs, combine: $("#jobCombine").value, verify: $("#jobVerify").checked });
     err.textContent = "";
   } catch (x) { err.textContent = x.message; }
 });
@@ -1030,7 +1159,8 @@ document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click
   tab = b.dataset.tab;
   document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
   document.querySelectorAll(".pane").forEach(p => p.classList.toggle("hidden", p.id !== "tab-" + tab));
-  if (tab === "chat") { unread = 0; showUnread(); }
+  if (tab === "chat") { unread = 0; showUnread(); $("#chatText").focus(); }
+  if (tab === "code") window.crewCode?.seen();
   if (tab === "files") { newFiles = 0; showNewFiles(); }
 }));
 
@@ -1043,7 +1173,7 @@ $("#inviteBtn").addEventListener("click", async () => {
 
 $("#leaveBtn").addEventListener("click", async () => {
   try { await api("/api/leave", S); } catch {}
-  es && es.close(); S = null; store.del("session"); store.del("pw");
+  es && es.close(); S = null; store.del("session"); store.del("pw"); store.del("claudeCred"); crewE2E.clear();
   showJoin("");
 });
 
@@ -1073,5 +1203,11 @@ $("#joinForm").addEventListener("submit", async e => {
   if (saved && saved.room === ($("#jRoom").value || saved.room)) { S = saved; connect(); }
 })();
 </script>
+<script src="browse.js"></script>
+<script src="claude.js"></script>
+<script src="code.js"></script>
+<script src="codechat.js"></script>
+<script src="terminal.js"></script>
+<script src="mail.js"></script>
 </body>
 </html>

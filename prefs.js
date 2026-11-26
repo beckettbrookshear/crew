@@ -24,7 +24,7 @@
     statusBar: true,
     sidebar: "left",
     wide: false,
-    startTab: "chat",
+    startTab: "code",
     chatStyle: "bubbles",
     timestamps: true,
     clock24: false,
@@ -172,7 +172,7 @@
     const check = () => {
       const hidden = app.classList.contains("hidden");
       root.classList.toggle("in-app", !hidden);
-      if (wasHidden && !hidden && P.startTab !== "chat") {
+      if (wasHidden && !hidden && P.startTab !== "code") {
         document.querySelector(`.tabs button[data-tab="${P.startTab}"]`)?.click();
       }
       wasHidden = hidden;
@@ -338,7 +338,7 @@
         row("Computers list", null, select("sidebar", { left: "On the left", right: "On the right", hidden: "Hidden" })),
         row("Use full window width", "Stretch past 1200px on big screens", toggle("wide")),
         row("Status bar", "Connection, group and time along the bottom", toggle("statusBar")),
-        row("Open on tab", "Which tab shows after you join", select("startTab", { chat: "Chat", files: "Files", notes: "Shared notes", compute: "Work together" })),
+        row("Open on tab", "Which tab shows after you join", select("startTab", { code: "Code", chat: "Chat", files: "Files", notes: "Shared notes", compute: "Work together" })),
       ),
     ]],
     chat: ["Chat", () => [
